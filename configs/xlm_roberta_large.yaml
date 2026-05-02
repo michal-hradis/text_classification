@@ -1,0 +1,25 @@
+_base_: base.yaml
+
+# XLM-RoBERTa large (~560M params).
+#
+# Memory on 20 GB GPU:
+#   weights (bf16) ~1.1 GB + gradients ~1.1 GB + Adam states (fp32) ~4.5 GB
+#   + activations ≈ 3-5 GB at bs=8/len=320 → ~10-12 GB total, comfortable.
+#   batch_size=16 would push activations to ~15+ GB and may OOM.
+#
+# Learning rate:
+#   Large models are more sensitive to high lr.  1e-5 is the standard
+#   recommendation for XLM-R large fine-tuning (Conneau et al.).
+
+clearml:
+  task_name: "xlm-roberta-large"
+
+model:
+  name_or_path: "FacebookAI/xlm-roberta-large"
+
+training:
+  batch_size: 8
+  grad_accumulation: 4   # effective batch size = 32, same as base config
+
+optimizer:
+  lr: 1.0e-5

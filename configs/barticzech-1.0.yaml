@@ -1,0 +1,20 @@
+_base_: base.yaml
+
+# BARTiczech — Czech BART encoder-decoder model (UWB-AIR).
+#
+# Architecture:
+#   Encoder-decoder (BART-base).  The classifier automatically calls
+#   model.get_encoder() in its forward pass, so the decoder is never
+#   executed and its weights do not contribute to gradient memory.
+#   hidden_size is read from config.d_model (BART convention).
+#   Memory: ~400 M params → fits comfortably on a 20 GB GPU at bs=16.
+#
+# Learning rate:
+#   Standard 2e-5 is fine for BART-base sized models.
+
+clearml:
+  task_name: "barticzech-1.0"
+
+model:
+  name_or_path: "UWB-AIR/barticzech-1.0"
+  pooling: "mean"   # mean-pool encoder tokens; no dedicated [CLS] in BART

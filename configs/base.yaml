@@ -1,0 +1,74 @@
+clearml:
+  enabled: true
+  project: "text-classification"
+  task_name: "small-e-czech__cls"
+
+tasks:
+  communicative_mode:
+    classes: [narration, description, exposition, argumentation, instruction, record, interaction, expression, rhetorics, other_mode, uncertain]
+  documentary_role:
+    classes: [journalistic, scholarly, literary, legal, administrative, religious, educational, commercial, personal, official_public_communication, reference, other_role, uncertain]
+  reliability_signals:
+    classes: [evidence_based, source_attributed, first_hand_account, procedurally_documented, analytical_inference, speculative_or_uncertain, asserted_without_support, promotional_or_advocacy, partisan_or_propagandistic, fictional_or_imaginative_frame, uncertain]
+  structural_form:
+    classes: [continuous_prose, verse_lines, list_or_enumeration, tabular, form_based_record, ledger_or_account_entry, header_or_title_block, dialogue_turns, navigation_or_reference_apparatus, quoted_block, entry_like_units, other_structure, garbage]
+  style:
+    classes: [formal, neutral, informal, bureaucratic, scholarly, journalistic, didactic, devotional, literary, promotional, formulaic, other_style, uncertain]
+  textual_stance:
+    classes: [neutral_descriptive, interpretive, evaluative, persuasive, normative, committed_assertive, hedged_or_cautious, partisan_or_polemical, satirical_or_ironic, other_stance, uncertain]
+
+model:
+  name_or_path: "Seznam/small-e-czech"
+  dropout: 0.1
+  pooling: "cls"          # cls | mean
+  freeze_encoder_layers: 0
+
+data:
+  train: "/home/ihradis/projects/2026-05-01_text_classification/experiments/data/train.jsonl"
+  val:
+    - path: "/home/ihradis/projects/2026-05-01_text_classification/experiments/data/val.jsonl"
+      name: "val"
+  trn:
+    - path: "/home/ihradis/projects/2026-05-01_text_classification/experiments/data/trn.jsonl"
+      name: "trn"      
+  max_length: 320
+  num_workers: 4
+
+training:
+  batch_size: 16
+  val_batch_size: 16
+  max_steps: 10000
+  val_every_n_steps: 500
+  grad_accumulation: 2
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: "norm"   # norm | value
+  precision: "bf16-mixed"
+  devices: "auto"
+  strategy: "auto"                  # ddp for multi-GPU
+  log_every_n_steps: 10
+
+optimizer:
+  lr: 2.0e-5
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+
+scheduler:
+  name: "linear_warmup_cosine"  # cosine | linear_warmup_cosine | linear_warmup |
+                                 # constant_warmup | reduce_on_plateau | one_cycle
+  warmup_steps: 500
+  total_steps: 10000
+  interval: "step"
+  frequency: 1
+
+checkpoint:
+  enabled: true
+  dirpath: "checkpoints"
+  save_top_k: 2
+  save_last: true
+  mode: "min"
+
+
+log_level: "INFO"
+seed: 42
+deterministic: false

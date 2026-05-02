@@ -1,0 +1,22 @@
+_base_: base.yaml
+
+# HPLT GPT-BERT base (Czech, v3.0) — causal / hybrid GPT-style pretraining.
+#
+# Architecture:
+#   Unlike masked-LM BERT models, GPT-style models do not prepend a [CLS]
+#   token.  `pooling: cls` would use the first real token (often a BOS or the
+#   first word-piece), which is not a special classification token.
+#   `pooling: mean` averages all token representations and is the standard
+#   choice for classification with causal encoders.
+#
+# Custom architecture:
+#   Like other HPLT v3 models this uses remote code (same LtgBERT family or
+#   successor).  The trust_remote_code patches in classifier.py apply
+#   automatically if needed.
+
+clearml:
+  task_name: "hplt-gpt-bert-base"
+
+model:
+  name_or_path: "HPLT/hplt_gpt_bert_base_3_0_ces_Latn"
+  pooling: "mean"
