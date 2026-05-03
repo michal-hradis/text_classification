@@ -49,6 +49,7 @@ Ground truth for each task is stored under the same key in the JSONL data rows.
 | `dropout` | float | `0.1` | Dropout before classification heads |
 | `pooling` | str | `"cls"` | `"cls"` (first token) or `"mean"` (masked mean) |
 | `freeze_encoder_layers` | int | `0` | Number of initial encoder layers to freeze |
+| `compile` | bool | `false` | Wrap model with `torch.compile` for faster training (PyTorch ≥ 2.0; adds ~1 min warm-up on first step) |
 
 ---
 

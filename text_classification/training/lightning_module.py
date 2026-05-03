@@ -65,6 +65,8 @@ class TextClassificationModule(pl.LightningModule):
             pooling=cfg.model.get("pooling", "cls"),
             freeze_encoder_layers=cfg.model.get("freeze_encoder_layers", 0),
         )
+        if cfg.model.get("compile", False):
+            self.model = torch.compile(self.model)
 
         # Per-dataset per-task metric accumulators
         self._val_metrics: dict[str, dict[str, MultiLabelMetrics]] = {

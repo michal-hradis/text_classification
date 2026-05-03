@@ -22,13 +22,13 @@ model:
   dropout: 0.1
   pooling: "cls"          # cls | mean
   freeze_encoder_layers: 0
+  compile: false          # torch.compile the model for faster training (requires PyTorch >= 2.0)
 
 data:
   train: "/home/ihradis/projects/2026-05-01_text_classification/experiments/data/train.jsonl"
   val:
     - path: "/home/ihradis/projects/2026-05-01_text_classification/experiments/data/val.jsonl"
       name: "val"
-  trn:
     - path: "/home/ihradis/projects/2026-05-01_text_classification/experiments/data/trn.jsonl"
       name: "trn"      
   max_length: 320
@@ -37,7 +37,7 @@ data:
 training:
   batch_size: 16
   val_batch_size: 16
-  max_steps: 10000
+  max_steps: 5000
   val_every_n_steps: 500
   grad_accumulation: 2
   gradient_clip_val: 1.0
@@ -57,7 +57,7 @@ scheduler:
   name: "linear_warmup_cosine"  # cosine | linear_warmup_cosine | linear_warmup |
                                  # constant_warmup | reduce_on_plateau | one_cycle
   warmup_steps: 500
-  total_steps: 10000
+  total_steps: 5000
   interval: "step"
   frequency: 1
 

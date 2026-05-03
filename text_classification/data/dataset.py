@@ -205,26 +205,32 @@ class TextClassificationDataModule(pl.LightningDataModule):
                 )
 
     def train_dataloader(self) -> DataLoader:
+        num_workers = self.cfg.data.get("num_workers", 4)
         return DataLoader(
             self.train_dataset,
             batch_size=self.cfg.training.batch_size,
             shuffle=True,
-            num_workers=self.cfg.data.get("num_workers", 4),
+            num_workers=num_workers,
             collate_fn=collate_fn,
             pin_memory=True,
             drop_last=True,
+            persistent_workers=num_workers > 0,
+            prefetch_factor=4 if num_workers > 0 else None,
         )
 
     def val_dataloader(self) -> list[DataLoader]:
         val_bs = self.cfg.training.get("val_batch_size", self.cfg.training.batch_size)
+        num_workers = self.cfg.data.get("num_workers", 4)
         return [
             DataLoader(
                 ds,
                 batch_size=val_bs,
                 shuffle=False,
-                num_workers=self.cfg.data.get("num_workers", 4),
+                num_workers=num_workers,
                 collate_fn=collate_fn,
                 pin_memory=True,
+                persistent_workers=num_workers > 0,
+                prefetch_factor=4 if num_workers > 0 else None,
             )
             for ds in self._val_datasets.values()
         ]
