@@ -139,9 +139,8 @@ def fix_example(
                 cleaned.append(cls)
             else:
                 _inc(counts, task, f"unknown_class:{cls}")
-        if len(cleaned) != len(value["classes"]):
-            value = dict(value)
-            value["classes"] = cleaned
+        value = dict(value)
+        value["classes"] = cleaned
 
         result[task] = value
 
