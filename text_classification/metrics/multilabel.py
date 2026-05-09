@@ -67,7 +67,7 @@ class MultiLabelMetrics:
             self._scores.append(probs)
             self._targets.append(tgts)
 
-    def compute(self) -> dict[str, float]:
+    def compute(self, detailed: bool = False) -> dict[str, float]:
         """Return a flat dict of all computed metric values.
 
         Keys follow the pattern ``"<metric>/<class_name>"`` for per-class
@@ -94,17 +94,18 @@ class MultiLabelMetrics:
                 ap_values.append(ap)
             else:
                 ap = float("nan")
-            metrics[f"ap/{cls}"] = ap
-
-            metrics[f"precision/{cls}"] = float(
-                precision_score(t, p, zero_division=0)
-            )
-            metrics[f"recall/{cls}"] = float(
-                recall_score(t, p, zero_division=0)
-            )
-            metrics[f"f1/{cls}"] = float(
-                f1_score(t, p, zero_division=0)
-            )
+            
+            if detailed:
+                metrics[f"ap/{cls}"] = ap
+                metrics[f"precision/{cls}"] = float(
+                    precision_score(t, p, zero_division=0)
+                )
+                metrics[f"recall/{cls}"] = float(
+                    recall_score(t, p, zero_division=0)
+                )
+                metrics[f"f1/{cls}"] = float(
+                    f1_score(t, p, zero_division=0)
+                )
 
         metrics["mAP"] = float(np.mean(ap_values)) if ap_values else float("nan")
 
