@@ -56,6 +56,8 @@ class TextClassificationModule(pl.LightningModule):
         self.tasks = tasks
         self.class_lists = class_lists
         self.val_dataset_names: list[str] = val_dataset_names or ["val"]
+        torch.set_float32_matmul_precision('medium')
+
 
         self.model = TransformerClassifier(
             model_name_or_path=cfg.model.name_or_path,
