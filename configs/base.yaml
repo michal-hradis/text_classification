@@ -5,40 +5,68 @@ clearml:
 
 tasks:
   communicative_mode:
-    classes: [narration, description, exposition, argumentation, instruction, record, interaction, expression, rhetorics, other_mode, uncertain]
+    classes: [narration, description, exposition, argumentation, instruction, record, interaction, expression, rhetorics]
+  complexity:
+    classes: [very_easy, easy, moderate, advanced, expert]
   documentary_role:
-    classes: [journalistic, scholarly, literary, legal, administrative, religious, educational, commercial, personal, official_public_communication, reference, other_role, uncertain]
+    classes: [journalistic, scholarly, literary, legal, administrative, religious, educational, commercial, personal, official_public_communication, reference]
+  emotional_tone:
+    classes: [neutral_or_detached, solemn_or_grave, celebratory_or_triumphant, anxious_or_alarmed, mournful_or_elegiac, indignant_or_outraged, hopeful_or_aspirational, reverent_or_devotional, ironic_or_sardonic, affectionate_or_tender]
+  geographic_scope:
+    classes: [hyper_local, local_or_municipal, regional, national, multi_national_or_continental, global_or_universal, non_geographic]
+  information_granularity:
+    classes: [general_overview, detailed_account, highly_specific, definitional, enumerative]
+  intertextual_density:
+    classes: [no_references, sparse, moderate, dense, uncertain]
+  named_entity_focus:
+    classes: [person_centric, organization_centric, place_centric, event_centric, work_centric, concept_or_topic_centric, mixed]
+  narrative_perspective:
+    classes: [first_person_singular, first_person_plural, second_person, third_person_personal, third_person_impersonal, mixed_or_shifting]
+  quantitative_content_density:
+    classes: [no_quantitative, incidental_numbers, moderate_quantitative, data_rich]
   reliability_signals:
-    classes: [evidence_based, source_attributed, first_hand_account, procedurally_documented, analytical_inference, speculative_or_uncertain, asserted_without_support, promotional_or_advocacy, partisan_or_propagandistic, fictional_or_imaginative_frame, uncertain]
+    classes: [evidence_based, source_attributed, first_hand_account, procedurally_documented, analytical_inference, speculative_or_uncertain, asserted_without_support, promotional_or_advocacy, partisan_or_propagandistic, fictional_or_imaginative_frame]
   structural_form:
     classes: [continuous_prose, verse_lines, list_or_enumeration, tabular, form_based_record, ledger_or_account_entry, header_or_title_block, dialogue_turns, navigation_or_reference_apparatus, quoted_block, entry_like_units, other_structure, garbage]
   style:
-    classes: [formal, neutral, informal, bureaucratic, scholarly, journalistic, didactic, devotional, literary, promotional, formulaic, other_style, uncertain]
+    classes: [formal, neutral, informal, bureaucratic, scholarly, journalistic, didactic, devotional, literary, promotional, formulaic]
+  subject_domain:
+    classes: [ddc_000_generalia, ddc_100_philosophy_psychology, ddc_200_religion, ddc_300_social_sciences, ddc_400_language, ddc_500_natural_sciences, ddc_600_applied_sciences, ddc_700_arts_recreation, ddc_800_literature, ddc_900_history_geography, news_and_current_affairs, official_and_legal_documents, personal_and_private_documents, commercial_and_trade_documents]
+  temporal_reference_frame:
+    classes: [contemporary_to_authorship, historical_past, remote_or_mythological_past, future_or_projective, timeless_or_general, mixed_temporal, uncertain]
   textual_stance:
-    classes: [neutral_descriptive, interpretive, evaluative, persuasive, normative, committed_assertive, hedged_or_cautious, partisan_or_polemical, satirical_or_ironic, other_stance, uncertain]
+    classes: [neutral_descriptive, interpretive, evaluative, persuasive, normative, committed_assertive, hedged_or_cautious, partisan_or_polemical, satirical_or_ironic]
+
+  #chunk_self_containedness:
+  #  classes: [fully_self_contained, mostly_self_contained, context_dependent, frame_only, fragmentary_or_corrupt]
+  #text_quality:
+  #  classes: [clean, minor_errors, noisy, heavily_degraded, unreadable]
+
 
 model:
   name_or_path: "Seznam/small-e-czech"
   dropout: 0.1
   pooling: "cls"          # cls | mean
   freeze_encoder_layers: 0
-  compile: false          # torch.compile the model for faster training (requires PyTorch >= 2.0)
+  compile: true          # torch.compile the model for faster training (requires PyTorch >= 2.0)
 
 data:
-  train: "/home/ihradis/projects/2026-05-01_text_classification/experiments/data/train.jsonl"
+  train: "/home/ihradis/projects/2026-05-01_text_classification/experiments/data.3.fixed/train.jsonl"
   val:
-    - path: "/home/ihradis/projects/2026-05-01_text_classification/experiments/data/val.jsonl"
+    - path: "/home/ihradis/projects/2026-05-01_text_classification/experiments/data.3.fixed/trn.jsonl"
+      name: "trn" 
+    - path: "/home/ihradis/projects/2026-05-01_text_classification/experiments/data.3.fixed/val.jsonl"
       name: "val"
-    - path: "/home/ihradis/projects/2026-05-01_text_classification/experiments/data/trn.jsonl"
-      name: "trn"      
-  max_length: 320
+    - path: "/home/ihradis/projects/2026-05-01_text_classification/experiments/data.3.fixed/test.jsonl"
+      name: "test"
+  max_length: 384
   num_workers: 4
 
 training:
   batch_size: 16
   val_batch_size: 16
   max_steps: 5000
-  val_every_n_steps: 500
+  val_every_n_steps: 1000
   grad_accumulation: 2
   gradient_clip_val: 1.0
   gradient_clip_algorithm: "norm"   # norm | value
@@ -54,7 +82,7 @@ optimizer:
   eps: 1.0e-8
 
 scheduler:
-  name: "linear_warmup_cosine"  # cosine | linear_warmup_cosine | linear_warmup |
+  name: "linear_warmup"  # cosine | linear_warmup_cosine | linear_warmup |
                                  # constant_warmup | reduce_on_plateau | one_cycle
   warmup_steps: 500
   total_steps: 5000
