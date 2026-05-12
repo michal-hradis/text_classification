@@ -51,13 +51,13 @@ model:
   compile: true          # torch.compile the model for faster training (requires PyTorch >= 2.0)
 
 data:
-  train: "/home/ihradis/projects/2026-05-01_text_classification/experiments/data.3.fixed/train.jsonl"
+  train: "/home/ihradis/projects/2026-05-01_text_classification/experiments/data.3.fixed.2/train.jsonl"
   val:
-    - path: "/home/ihradis/projects/2026-05-01_text_classification/experiments/data.3.fixed/trn.jsonl"
+    - path: "/home/ihradis/projects/2026-05-01_text_classification/experiments/data.3.fixed.2/trn.jsonl"
       name: "trn" 
-    - path: "/home/ihradis/projects/2026-05-01_text_classification/experiments/data.3.fixed/val.jsonl"
+    - path: "/home/ihradis/projects/2026-05-01_text_classification/experiments/data.3.fixed.2/val.jsonl"
       name: "val"
-    - path: "/home/ihradis/projects/2026-05-01_text_classification/experiments/data.3.fixed/test.jsonl"
+    - path: "/home/ihradis/projects/2026-05-01_text_classification/experiments/data.3.fixed.2/test.jsonl"
       name: "test"
   max_length: 384
   num_workers: 4
