@@ -1,0 +1,71 @@
+# JEPA smoketest configuration
+#
+# Tiny model and data for CI / integration testing.
+# Runs 10 training steps in a few seconds on CPU.
+#
+# Usage:
+#   python jepa_pretrain.py configs/jepa_smoketest.yaml
+
+_base_: jepa_base.yaml
+
+clearml:
+  enabled: false
+
+model:
+  byte_dim: 32
+  seg_dim: 64
+  pred_dim: 64
+  n_byte_blocks: 1
+  n_encoder_layers: 2
+  n_heads: 2
+  ffn_dim: 128
+  n_predictor_layers: 2
+  kernel_size: 3
+  dropout: 0.0
+  byte_dropout: 0.0
+  ema_momentum: 0.99
+  compile: false
+
+data:
+  train: "tests/jepa/data/smoketest.jsonl"
+  val:
+    - path: "tests/jepa/data/smoketest.jsonl"
+      name: "val"
+  max_segments: 16
+  num_workers: 0
+
+corruption:
+  missing_span_prob: 0.3
+  missing_span_frac_min: 0.1
+  missing_span_frac_max: 0.3
+  segment_dropout_prob: 0.05
+  foreign_replace_frac: 0.05
+  byte_corrupt_prob: 0.05
+
+training:
+  batch_size: 2
+  val_batch_size: 2
+  max_steps: 10
+  val_every_n_steps: 5
+  grad_accumulation: 1
+  gradient_clip_val: 1.0
+  precision: "32"
+  devices: 1
+  strategy: "auto"
+  log_every_n_steps: 1
+
+optimizer:
+  lr: 1.0e-3
+  weight_decay: 0.0
+
+scheduler:
+  name: "constant_warmup"
+  warmup_steps: 2
+  interval: "step"
+  frequency: 1
+
+checkpoint:
+  enabled: false
+
+seed: 42
+log_level: "INFO"

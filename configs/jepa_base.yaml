@@ -1,0 +1,119 @@
+# JEPA byte-segment pretraining — base configuration
+#
+# This file contains all settings with their defaults.
+# Model-specific or run-specific configs should inherit with:
+#   _base_: jepa_base.yaml
+
+clearml:
+  enabled: false
+  project: "jepa-pretraining"
+  task_name: "jepa-base"
+
+# ---------------------------------------------------------------------------
+# Model architecture
+# ---------------------------------------------------------------------------
+model:
+  byte_dim: 256             # Byte embedding + local processor hidden size
+  seg_dim: 512              # Segment model dimension (Transformer d_model)
+  pred_dim: 512             # Prediction / target embedding dimension
+  n_byte_blocks: 4          # Conv1D/SwiGLU residual blocks
+  n_encoder_layers: 12      # Student/teacher Transformer encoder layers
+  n_heads: 8                # Attention heads
+  ffn_dim: 2048             # Transformer FFN hidden dimension
+  n_predictor_layers: 4     # Predictor cross-attention layers
+  kernel_size: 5            # Conv1D kernel size in local byte processor
+  dropout: 0.1
+  byte_dropout: 0.05
+  ema_momentum: 0.996       # Initial EMA momentum (anneals to ema.momentum_end)
+  compile: false            # torch.compile (PyTorch >= 2.0)
+
+# ---------------------------------------------------------------------------
+# EMA schedule (spec §12)
+# ---------------------------------------------------------------------------
+ema:
+  momentum_start: 0.996
+  momentum_end: 0.9999
+
+# ---------------------------------------------------------------------------
+# Loss weights (spec §8.4)
+# ---------------------------------------------------------------------------
+loss:
+  segment: 1.0
+  document: 0.2
+  variance: 0.05
+  covariance: 0.01
+
+# ---------------------------------------------------------------------------
+# Data
+# ---------------------------------------------------------------------------
+data:
+  train: "/home/ihradis/projects/2026-05-01_text_classification/experiments/data.corpora/train.2"
+  val:
+    - path: "/home/ihradis/projects/2026-05-01_text_classification/experiments/data.corpora/val"
+      index_cache_dir: "/home/ihradis/projects/2026-05-01_text_classification/experiments/data.corpora/val.index_cache"
+      name: "val"
+  max_segments: 256        # max canonical segments per document (1024 × 32 = 32,768 bytes)
+  num_workers: 0
+
+# ---------------------------------------------------------------------------
+# Corruption parameters (spec §7)
+# ---------------------------------------------------------------------------
+corruption:
+  missing_span_prob: 0.3
+  missing_span_frac_min: 0.05
+  missing_span_frac_max: 0.25
+  segment_dropout_prob: 0.05
+  foreign_replace_frac: 0.05
+  local_reorder_prob: 0.0
+  truncate_prob: 0.1
+  truncate_frac_max: 0.2
+  byte_corrupt_prob: 0.05
+  byte_heavy_frac: 0.10
+
+# ---------------------------------------------------------------------------
+# Training
+# ---------------------------------------------------------------------------
+training:
+  batch_size: 32
+  val_batch_size: 32
+  max_steps: 500000
+  val_every_n_steps: 2000
+  grad_accumulation: 4
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: "norm"
+  precision: "bf16-mixed"
+  devices: "auto"
+  strategy: "auto"
+  log_every_n_steps: 10
+
+# ---------------------------------------------------------------------------
+# Optimizer (spec §12)
+# ---------------------------------------------------------------------------
+optimizer:
+  lr: 1.5e-4
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+
+# ---------------------------------------------------------------------------
+# LR scheduler
+# ---------------------------------------------------------------------------
+scheduler:
+  name: "linear_warmup_cosine"
+  warmup_steps: 3000
+  total_steps: 500000
+  interval: "step"
+  frequency: 1
+
+# ---------------------------------------------------------------------------
+# Checkpointing
+# ---------------------------------------------------------------------------
+checkpoint:
+  enabled: true
+  dirpath: "checkpoints/jepa"
+  save_top_k: 3
+  save_last: true
+  mode: "min"
+
+seed: 42
+log_level: "INFO"

@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Multi-label text classification for Czech OCR documents"
 requires-python = ">=3.10"
 dependencies = [
-    "torch==2.11.0",
+    "torch>=2.10.0",
     "pytorch-lightning>=2.3.0",
     "transformers>=4.40.0",
     "omegaconf>=2.3.0",
@@ -22,10 +22,23 @@ dev = [
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
 ]
+llm = [
+    "peft>=0.11.0",
+    "accelerate>=0.30.0",
+    "bitsandbytes>=0.43.0",
+    "rouge-score>=0.1.2",
+    "bert-score>=0.3.13",
+]
+unsloth = [
+    "unsloth>=2024.8",
+]
 
 [project.scripts]
 tc-train = "text_classification.train:main"
 tc-export = "text_classification.export:main"
+tc-llm-train = "text_classification.llm.train:main"
+tc-llm-eval = "text_classification.llm.eval:main"
+tc-jepa-pretrain = "text_classification.jepa.train:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

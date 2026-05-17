@@ -223,3 +223,33 @@ clearml:
 ```
 
 Requires `clearml` installed and credentials configured (`clearml-init`).
+
+---
+
+## JEPA Pretraining
+
+Tokenizer-free **byte-segment JEPA** pretraining produces dense document and segment representations from raw text without any tokenizer or supervised labels.  It can serve as an initialisation for downstream classifiers or be used to produce embeddings directly.
+
+### Quick Start
+
+```bash
+# Smoketest (tiny model, 10 steps, CPU — stays in the repo)
+python jepa_pretrain.py configs/jepa_smoketest.yaml
+
+# Full pretraining
+python jepa_pretrain.py configs/jepa_base.yaml \
+    data.train=/path/to/train.jsonl \
+    data.val=/path/to/val.jsonl
+
+# Console entry point (after pip install -e .)
+tc-jepa-pretrain configs/jepa_base.yaml
+```
+
+### Overview
+
+- **Tokenizer-free**: operates on raw UTF-8 bytes in 32-byte canonical segments.
+- **Student / teacher**: EMA teacher provides stable regression targets; student encoder learns to predict masked regions.
+- **Curriculum**: training automatically advances through 5 document-length stages (500–10 000 chars) as validation loss plateaus.
+- **Collapse monitoring**: variance and covariance regularisation (VICReg) prevent representation collapse.
+
+See [`docs/jepa_pretraining.md`](docs/jepa_pretraining.md) for the full configuration reference, architecture details, and embedding extraction examples.
