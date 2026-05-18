@@ -1,0 +1,108 @@
+clearml:
+  enabled: true
+  project: "text-classification"
+  task_name: "jepa-finetune-200"
+
+tasks:
+  communicative_mode:
+    classes: [narration, description, exposition, argumentation, instruction, record, interaction, expression, rhetorics]
+  complexity:
+    classes: [very_easy, easy, moderate, advanced, expert]
+  documentary_role:
+    classes: [journalistic, scholarly, literary, legal, administrative, religious, educational, commercial, personal, official_public_communication, reference]
+  emotional_tone:
+    classes: [neutral_or_detached, solemn_or_grave, celebratory_or_triumphant, anxious_or_alarmed, mournful_or_elegiac, indignant_or_outraged, hopeful_or_aspirational, reverent_or_devotional, ironic_or_sardonic, affectionate_or_tender]
+  geographic_scope:
+    classes: [hyper_local, local_or_municipal, regional, national, multi_national_or_continental, global_or_universal, non_geographic]
+  information_granularity:
+    classes: [general_overview, detailed_account, highly_specific, definitional, enumerative]
+  intertextual_density:
+    classes: [no_references, sparse, moderate, dense, uncertain]
+  named_entity_focus:
+    classes: [person_centric, organization_centric, place_centric, event_centric, work_centric, concept_or_topic_centric, mixed]
+  narrative_perspective:
+    classes: [first_person_singular, first_person_plural, second_person, third_person_personal, third_person_impersonal, mixed_or_shifting]
+  quantitative_content_density:
+    classes: [no_quantitative, incidental_numbers, moderate_quantitative, data_rich]
+  reliability_signals:
+    classes: [evidence_based, source_attributed, first_hand_account, procedurally_documented, analytical_inference, speculative_or_uncertain, asserted_without_support, promotional_or_advocacy, partisan_or_propagandistic, fictional_or_imaginative_frame]
+  structural_form:
+    classes: [continuous_prose, verse_lines, list_or_enumeration, tabular, form_based_record, ledger_or_account_entry, header_or_title_block, dialogue_turns, navigation_or_reference_apparatus, quoted_block, entry_like_units, other_structure, garbage]
+  style:
+    classes: [formal, neutral, informal, bureaucratic, scholarly, journalistic, didactic, devotional, literary, promotional, formulaic]
+  subject_domain:
+    classes: [ddc_000_generalia, ddc_100_philosophy_psychology, ddc_200_religion, ddc_300_social_sciences, ddc_400_language, ddc_500_natural_sciences, ddc_600_applied_sciences, ddc_700_arts_recreation, ddc_800_literature, ddc_900_history_geography, news_and_current_affairs, official_and_legal_documents, personal_and_private_documents, commercial_and_trade_documents]
+  temporal_reference_frame:
+    classes: [contemporary_to_authorship, historical_past, remote_or_mythological_past, future_or_projective, timeless_or_general, mixed_temporal, uncertain]
+  textual_stance:
+    classes: [neutral_descriptive, interpretive, evaluative, persuasive, normative, committed_assertive, hedged_or_cautious, partisan_or_polemical, satirical_or_ironic]
+
+model:
+  checkpoint_path: "checkpoints/jepa/last-v1.ckpt"   # path to pretrained JEPA .ckpt
+  use_teacher: true                                # true = EMA teacher (recommended)
+  pooling: "doc_token"                             # doc_token | mean_segments
+  freeze_encoder_layers: 0                         # 0 = full finetune, -1 = linear probe, N = freeze first N Transformer layers (+ pre-Transformer stages)
+  dropout: 0.1                                     # classification head dropout
+  compile: false
+
+  # Architecture parameters — must match the pretrained checkpoint exactly.
+  # Defaults correspond to jepa_base.yaml / jepa_light.yaml base settings.
+  byte_dim: 256             # Byte embedding + local processor hidden size
+  seg_dim: 512              # Segment model dimension (Transformer d_model)
+  n_byte_blocks: 4          # Conv1D/SwiGLU residual blocks
+  n_encoder_layers: 6      # Student/teacher Transformer encoder layers
+  n_heads: 8                # Attention heads
+  ffn_dim: 2048             # Transformer FFN hidden dimension
+  kernel_size: 5            # Conv1D kernel size in local byte processor
+  dropout_encoder: 0.05
+  byte_dropout: 0.05
+
+
+data:
+  train: "/home/ihradis/projects/2026-05-01_text_classification/experiments/data.3.fixed.2/train.jsonl"
+  val:
+    - path: "/home/ihradis/projects/2026-05-01_text_classification/experiments/data.3.fixed.2/trn.jsonl"
+      name: "trn" 
+    - path: "/home/ihradis/projects/2026-05-01_text_classification/experiments/data.3.fixed.2/val.jsonl"
+      name: "val"
+    - path: "/home/ihradis/projects/2026-05-01_text_classification/experiments/data.3.fixed.2/test.jsonl"
+      name: "test"
+  max_segments: 256        # must be ≤ pretrained max_segments (256 for jepa_light_2)
+  num_workers: 4
+
+training:
+  batch_size: 16
+  val_batch_size: 16
+  max_steps: 10000
+  val_every_n_steps: 1000
+  grad_accumulation: 2
+  gradient_clip_val: 1.0
+  gradient_clip_algorithm: "norm"
+  precision: "bf16-mixed"
+  devices: "auto"
+  strategy: "auto"
+  log_every_n_steps: 10
+
+optimizer:
+  lr: 1.0e-4           # JEPA finetuning typically needs a higher LR than BERT (1e-4 vs 2e-5)
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+  eps: 1.0e-8
+
+scheduler:
+  name: "linear_warmup"
+  warmup_steps: 500
+  total_steps: 10000
+  interval: "step"
+  frequency: 1
+
+checkpoint:
+  enabled: true
+  dirpath: "checkpoints/jepa_finetune"
+  save_top_k: 2
+  save_last: true
+  mode: "min"
+
+log_level: "INFO"
+seed: 42
+deterministic: false

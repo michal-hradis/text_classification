@@ -25,6 +25,7 @@ from omegaconf import DictConfig
 
 from text_classification.models.classifier import TransformerClassifier
 from text_classification.metrics.multilabel import MultiLabelMetrics
+from text_classification.utils.optimizers import build_optimizer, build_scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -308,47 +309,13 @@ class TextClassificationModule(pl.LightningModule):
         opt_cfg = self.cfg.optimizer
         sched_cfg = self.cfg.get("scheduler", None)
 
-        # Weight-decay group split (exclude bias and LayerNorm weights)
-        no_decay = {"bias", "LayerNorm.weight", "layer_norm.weight"}
-        param_groups = [
-            {
-                "params": [
-                    p
-                    for n, p in self.model.named_parameters()
-                    if p.requires_grad and not any(nd in n for nd in no_decay)
-                ],
-                "weight_decay": opt_cfg.get("weight_decay", 0.01),
-            },
-            {
-                "params": [
-                    p
-                    for n, p in self.model.named_parameters()
-                    if p.requires_grad and any(nd in n for nd in no_decay)
-                ],
-                "weight_decay": 0.0,
-            },
-        ]
-
-        optimizer = torch.optim.AdamW(
-            param_groups,
-            lr=opt_cfg.lr,
-            betas=tuple(opt_cfg.get("betas", [0.9, 0.999])),
-            eps=opt_cfg.get("eps", 1e-8),
-        )
+        optimizer = build_optimizer(self.model.named_parameters(), opt_cfg)
 
         if sched_cfg is None:
             return optimizer
 
-        scheduler = self._build_scheduler(optimizer, sched_cfg)
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "interval": sched_cfg.get("interval", "step"),
-                "frequency": sched_cfg.get("frequency", 1),
-                "monitor": sched_cfg.get("monitor", "val/loss"),
-            },
-        }
+        max_steps = self.trainer.max_steps if self.trainer.max_steps > 0 else 10_000
+        return {"optimizer": optimizer, "lr_scheduler": build_scheduler(optimizer, sched_cfg, max_steps)}
 
     def _build_scheduler(
         self, optimizer: torch.optim.Optimizer, cfg: DictConfig
