@@ -87,6 +87,11 @@ class JEPAFinetuneModule(TextClassificationModule):
             kernel_size=int(model_cfg.get("kernel_size", 5)),
             dropout_encoder=float(model_cfg.get("dropout_encoder", 0.1)),
             byte_dropout=float(model_cfg.get("byte_dropout", 0.05)),
+            # ModernBERT-style options
+            n_additional_tokens=int(model_cfg.get("n_additional_tokens", 0)),
+            local_window_size=int(model_cfg.get("local_window_size", 0)),
+            global_attention_every_n=int(model_cfg.get("global_attention_every_n", 1)),
+            activation=str(model_cfg.get("activation", "swiglu")),
         )
         # Warn if the dataset would generate more segments than the encoder supports
         ckpt_max_segs = self.model.max_segments

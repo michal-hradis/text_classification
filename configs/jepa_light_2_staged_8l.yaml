@@ -1,0 +1,31 @@
+# JEPA light-2 staged extension — 8-layer encoder
+#
+# Loads a pretrained 6-layer jepa_light_2 checkpoint and extends the encoder
+# to 8 layers.  The first 6 layers come from the checkpoint; the two new
+# layers at the end are randomly initialised with Megatron-style scaling.
+# The predictor and all other weights are also loaded from the checkpoint.
+#
+# Workflow:
+#   1. Train jepa_light_2.yaml to convergence  →  checkpoints/jepa/last.ckpt
+#   2. Run this config to continue training:
+#
+#   python jepa_pretrain.py configs/jepa_light_2_staged_8l.yaml
+#
+# After this converges, create a jepa_light_2_staged_12l.yaml that sets
+#   n_encoder_layers: 12  and points extend_from_checkpoint at the 8-layer ckpt.
+
+_base_: jepa_light_2.yaml
+
+clearml:
+  task_name: "jepa-light-2-staged-8l"
+
+model:
+  n_encoder_layers: 8
+  extend_from_checkpoint: "checkpoints/jepa/last.ckpt"  # 6-layer checkpoint
+  # Keep the teacher frozen initially; switch to "ema" once the new layers
+  # have warmed up (or just use "ema" from the start for a smooth transition).
+  teacher_mode: "ema"
+
+scheduler:
+  # Shorter warmup since most weights are pretrained
+  warmup_steps: 500

@@ -26,6 +26,14 @@ model:
   byte_dropout: 0.05
   ema_momentum: 0.996       # Initial EMA momentum (anneals to ema.momentum_end)
   compile: false            # torch.compile (PyTorch >= 2.0)
+  # ModernBERT-style options
+  n_additional_tokens: 0        # Extra static tokens prepended alongside [DOC]
+  local_window_size: 0          # 0 = full attention; >0 = sliding window
+  global_attention_every_n: 1   # Every n-th layer uses full global attention
+  activation: "swiglu"          # "swiglu" or "geglu"
+  teacher_mode: "ema"           # "ema" or "frozen"
+  megatron_init: true           # Use Megatron-Core weight initialisation
+  extend_from_checkpoint: null  # Path to a smaller checkpoint to extend from
 
 # ---------------------------------------------------------------------------
 # EMA schedule (spec §12)

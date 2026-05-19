@@ -95,6 +95,11 @@ class JEPAClassifier(nn.Module):
         kernel_size: int = 5,
         dropout_encoder: float = 0.1,
         byte_dropout: float = 0.05,
+        # ModernBERT-style architecture parameters
+        n_additional_tokens: int = 0,
+        local_window_size: int = 0,
+        global_attention_every_n: int = 1,
+        activation: str = "swiglu",
     ) -> None:
         super().__init__()
         if pooling not in ("doc_token", "mean_segments"):
@@ -103,9 +108,9 @@ class JEPAClassifier(nn.Module):
         self.tasks = tasks
         self.pooling = pooling
         self.seg_dim = seg_dim
+        self.n_additional_tokens = n_additional_tokens
 
-        # Auto-detect max_segments from the checkpoint's pos_embed table so that
-        # users don't have to manually synchronize this with the pretrain config.
+        # Auto-detect max_segments from checkpoint.
         ckpt_max_segments = self._peek_max_segments(checkpoint_path, use_teacher)
         if max_segments is not None and max_segments != ckpt_max_segments:
             logger.warning(
@@ -127,6 +132,10 @@ class JEPAClassifier(nn.Module):
             kernel_size=kernel_size,
             dropout=dropout_encoder,
             byte_dropout=byte_dropout,
+            n_additional_tokens=n_additional_tokens,
+            local_window_size=local_window_size,
+            global_attention_every_n=global_attention_every_n,
+            activation=activation,
         )
         self._load_encoder_weights(checkpoint_path, use_teacher)
 
@@ -154,21 +163,32 @@ class JEPAClassifier(nn.Module):
 
     @staticmethod
     def _peek_max_segments(checkpoint_path: str, use_teacher: bool) -> int:
-        """Read ``max_segments`` from the encoder's ``pos_embed`` table shape.
+        """Read ``max_segments`` from the checkpoint.
 
-        This avoids requiring the user to keep ``data.max_segments`` in the
-        finetune config in sync with the pretraining config.
+        Supports both the new architecture (``_max_segments`` buffer) and the
+        legacy architecture (``pos_embed.weight`` table).
         """
         raw_sd = JEPAClassifier._load_raw_state_dict(checkpoint_path)
         branch = "teacher" if use_teacher else "student"
-        key = f"model.{branch}.pos_embed.weight"
-        if key not in raw_sd:
-            raise KeyError(
-                f"Cannot auto-detect max_segments: key {key!r} not found in checkpoint."
+        # New architecture: scalar buffer registered in ByteSegmentEncoder.
+        new_key = f"model.{branch}._max_segments"
+        if new_key in raw_sd:
+            max_segments = int(raw_sd[new_key].item())
+            logger.info("Auto-detected max_segments=%d from checkpoint.", max_segments)
+            return max_segments
+        # Legacy architecture: pos_embed embedding table.
+        old_key = f"model.{branch}.pos_embed.weight"
+        if old_key in raw_sd:
+            max_segments = raw_sd[old_key].shape[0]
+            logger.info(
+                "Auto-detected max_segments=%d from checkpoint (legacy pos_embed).",
+                max_segments,
             )
-        max_segments = raw_sd[key].shape[0]
-        logger.info("Auto-detected max_segments=%d from checkpoint.", max_segments)
-        return max_segments
+            return max_segments
+        raise KeyError(
+            f"Cannot auto-detect max_segments: neither {new_key!r} nor {old_key!r} "
+            f"found in checkpoint."
+        )
 
     # ------------------------------------------------------------------
     # Checkpoint loading
@@ -230,17 +250,18 @@ class JEPAClassifier(nn.Module):
             return
 
         # Freeze pre-Transformer stages
-        pre_transformer_parts: list[nn.Module | nn.Parameter] = [
+        pre_transformer_modules: list[nn.Module] = [
             self.encoder.byte_embed,
             self.encoder.local_proc,
             self.encoder.reducer,
-            self.encoder.pos_embed,
         ]
-        for part in pre_transformer_parts:
-            for p in part.parameters():
+        for mod in pre_transformer_modules:
+            for p in mod.parameters():
                 p.requires_grad_(False)
-        # doc_embed is an nn.Parameter, not a module
+        # Static token embeddings (nn.Parameters, not modules)
         self.encoder.doc_embed.requires_grad_(False)
+        if getattr(self.encoder, "additional_token_embeds", None) is not None:
+            self.encoder.additional_token_embeds.requires_grad_(False)
 
         # Freeze first N Transformer layers
         n_to_freeze = min(freeze_encoder_layers, n_encoder_layers)
@@ -281,13 +302,14 @@ class JEPAClassifier(nn.Module):
             Dict mapping task name → raw logits of shape
             ``(B, num_classes[task])``.
         """
-        # encoder_out: (B, 1+N, seg_dim), layer_outputs: list
+        # encoder_out: (B, n_static+N, seg_dim), layer_outputs: list
         encoder_out, _ = self.encoder(byte_values, byte_types, positions, seg_mask)
+        n_static = self.encoder.n_static  # 1 + n_additional_tokens
 
         if self.pooling == "doc_token":
             pooled = encoder_out[:, 0, :]                          # (B, seg_dim)
         else:  # mean_segments
-            segs = encoder_out[:, 1:, :]                           # (B, N, seg_dim)
+            segs = encoder_out[:, n_static:, :]                    # (B, N, seg_dim)
             if seg_mask is not None:
                 mask = seg_mask.float().unsqueeze(-1)              # (B, N, 1)
                 pooled = (segs * mask).sum(1) / mask.sum(1).clamp(min=1e-9)

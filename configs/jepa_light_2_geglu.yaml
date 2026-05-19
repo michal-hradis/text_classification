@@ -1,0 +1,18 @@
+# JEPA light-2 with GeGLU feed-forward blocks
+#
+# Identical to jepa_light_2.yaml except the SwiGLU (SiLU-gated) FFN is
+# replaced with GeGLU (GELU-gated), which some work has found to train more
+# smoothly at smaller scales.
+#
+# Use this config as an ablation against the default SwiGLU variant.
+#
+# Usage:
+#   python jepa_pretrain.py configs/jepa_light_2_geglu.yaml
+
+_base_: jepa_light_2.yaml
+
+clearml:
+  task_name: "jepa-light-2-geglu"
+
+model:
+  activation: "geglu"

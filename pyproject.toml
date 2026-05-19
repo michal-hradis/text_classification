@@ -39,6 +39,7 @@ tc-export = "text_classification.export:main"
 tc-llm-train = "text_classification.llm.train:main"
 tc-llm-eval = "text_classification.llm.eval:main"
 tc-jepa-pretrain = "text_classification.jepa.train:main"
+tc-jepa-finetune = "text_classification.jepa.finetune:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

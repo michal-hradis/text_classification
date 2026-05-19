@@ -56,6 +56,11 @@ model:
   kernel_size: 5
   dropout_encoder: 0.1
   byte_dropout: 0.05
+  # ModernBERT-style options — must match the pretrained checkpoint.
+  n_additional_tokens: 0
+  local_window_size: 0
+  global_attention_every_n: 1
+  activation: "swiglu"
 
 data:
   train: "/path/to/train.jsonl"

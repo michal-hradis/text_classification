@@ -110,8 +110,6 @@ class TestJEPASmoketest:
         # Check all teacher params are frozen
         for name, param in module.model.teacher.named_parameters():
             assert not param.requires_grad, f"Teacher param {name} requires grad"
-        for name, param in module.model.teacher_doc_head.named_parameters():
-            assert not param.requires_grad, f"Teacher doc head param {name} requires grad"
 
     def test_student_params_receive_grad(self):
         """Student encoder parameters must receive gradients."""

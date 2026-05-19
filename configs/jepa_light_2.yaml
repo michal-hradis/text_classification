@@ -17,7 +17,7 @@ model:
   seg_dim: 512              # Segment model dimension (Transformer d_model)
   pred_dim: 512             # Prediction / target embedding dimension
   n_byte_blocks: 4          # Conv1D/SwiGLU residual blocks
-  n_encoder_layers: 6      # Student/teacher Transformer encoder layers
+  n_encoder_layers: 8      # Student/teacher Transformer encoder layers
   n_heads: 8                # Attention heads
   ffn_dim: 2048             # Transformer FFN hidden dimension
   n_predictor_layers: 4     # Predictor cross-attention layers
@@ -26,6 +26,14 @@ model:
   byte_dropout: 0.05
   ema_momentum: 0.999       # Initial EMA momentum (anneals to ema.momentum_end)
   compile: false            # torch.compile (PyTorch >= 2.0)
+  # ModernBERT-style options
+  n_additional_tokens: 4        # Extra static tokens prepended alongside [DOC]
+  local_window_size: 0          # 0 = full attention; >0 = sliding window
+  global_attention_every_n: 1   # Every n-th layer uses full global attention
+  activation: "swiglu"          # "swiglu" or "geglu"
+  teacher_mode: "ema"           # "ema" or "frozen"
+  megatron_init: true           # Use Megatron-Core weight initialisation
+  extend_from_checkpoint: null  # Path to a smaller checkpoint to extend from
 
 # ---------------------------------------------------------------------------
 # EMA schedule (spec §12)
@@ -40,8 +48,8 @@ ema:
 loss:
   segment: 1.0
   document: 0
-  variance: 0.2
-  covariance: 0
+  variance: 0.4
+  covariance: 1
 
 # ---------------------------------------------------------------------------
 # Data
@@ -59,14 +67,14 @@ data:
 # Corruption parameters (spec §7)
 # ---------------------------------------------------------------------------
 corruption:
-  missing_span_prob: 0.3
+  missing_span_prob: 0.2
   missing_span_frac_min: 0.05
   missing_span_frac_max: 0.15
-  segment_dropout_prob: 0.10
+  segment_dropout_prob: 0.20
   foreign_replace_frac: 0
   local_reorder_prob: 0.0
-  truncate_prob: 0
-  truncate_frac_max: 0
+  truncate_prob: 0.2
+  truncate_frac_max: 0.2
   byte_corrupt_prob: 0.05
   byte_heavy_frac: 0
 
@@ -100,7 +108,7 @@ optimizer:
 # ---------------------------------------------------------------------------
 scheduler:
   name: "linear_warmup_cosine"
-  warmup_steps: 1000
+  warmup_steps: 500
   total_steps: 500000
   interval: "step"
   frequency: 1

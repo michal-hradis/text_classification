@@ -1,0 +1,21 @@
+# JEPA light-2 with ModernBERT-style local/global attention
+#
+# Same 6-layer architecture as jepa_light_2.yaml, but uses a sliding-window
+# local attention in 4 out of every 3 layers, with full global attention every
+# 3rd layer (layers 3 and 6).  This mirrors the ModernBERT alternating pattern
+# and reduces the O(n²) cost for long-context documents.
+#
+# local_window_size=16  → each segment attends ±16 neighbours (32-token span)
+# global_attention_every_n=2 → layers 2, 4, 6 (last) use full global attention
+#
+# Usage:
+#   python jepa_pretrain.py configs/jepa_light_2_local.yaml
+
+_base_: jepa_light_2.yaml
+
+clearml:
+  task_name: "jepa-light-2-local"
+
+model:
+  local_window_size: 16
+  global_attention_every_n: 2

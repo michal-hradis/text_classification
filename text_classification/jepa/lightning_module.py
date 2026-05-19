@@ -83,7 +83,23 @@ class JEPAPretrainingModule(pl.LightningModule):
             dropout=float(model_cfg.get("dropout", 0.1)),
             byte_dropout=float(model_cfg.get("byte_dropout", 0.05)),
             ema_momentum=float(model_cfg.get("ema_momentum", 0.996)),
+            # ModernBERT-style options
+            n_additional_tokens=int(model_cfg.get("n_additional_tokens", 0)),
+            local_window_size=int(model_cfg.get("local_window_size", 0)),
+            global_attention_every_n=int(model_cfg.get("global_attention_every_n", 1)),
+            activation=str(model_cfg.get("activation", "swiglu")),
+            teacher_mode=str(model_cfg.get("teacher_mode", "ema")),
+            megatron_init=bool(model_cfg.get("megatron_init", True)),
         )
+
+        # Optional partial checkpoint load for gradual layer extension
+        extend_from = model_cfg.get("extend_from_checkpoint", None)
+        if extend_from is not None:
+            import logging as _logging
+            _logging.getLogger(__name__).info(
+                "Loading partial checkpoint for layer extension: %s", extend_from
+            )
+            self.model.load_partial_checkpoint(str(extend_from))
 
         if model_cfg.get("compile", False):
             self.model = torch.compile(self.model)
