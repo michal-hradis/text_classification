@@ -119,8 +119,18 @@ def main(argv: list[str] | None = None) -> None:
         deterministic=cfg.get("deterministic", False),
     )
 
+    ckpt_path = (
+        ckpt_cfg.get("ckpt_path", None)
+        or ckpt_cfg.get("resume_from_checkpoint", None)
+        or cfg.get("ckpt_path", None)
+        or cfg.get("resume_from_checkpoint", None)
+    )
+
+    if ckpt_path:
+        logger.info("Resuming JEPA pretraining from checkpoint: %s", ckpt_path)
+
     logger.info("Starting JEPA pretraining (max_steps=%d)…", cfg.training.max_steps)
-    trainer.fit(model_module, datamodule=data_module)
+    trainer.fit(model_module, datamodule=data_module, ckpt_path=ckpt_path)
     logger.info("JEPA pretraining complete.")
 
 
