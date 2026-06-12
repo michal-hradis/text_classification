@@ -1,0 +1,129 @@
+project:
+  name: reliability-signals
+  run_name: qwen35-4b-reliability-lora-streaming
+  seed: 3407
+
+clearml:
+  enabled: true
+  project_name: LLM/Test_LLM
+  task_name: qwen35-4b-reliability-lora-streaming
+  output_uri: null
+  tags:
+    - unsloth
+    - streaming
+    - assistant-only-loss
+    - qwen3.5
+
+model:
+  family: qwen3_5
+  model_name: unsloth/Qwen3.5-0.8B
+  loader: auto
+  max_seq_length: 2048
+  dtype: bfloat16
+  trust_remote_code: true
+
+  load_in_4bit: false
+  load_in_8bit: false
+  load_in_16bit: true
+  full_finetuning: true
+
+  eos_token: auto
+  pad_token: auto
+
+data:
+  streaming: true
+
+  # Can be a single file:
+  train_jsonl: /home/ihradis/projects/2025-05-11_semant_demo/semant-demo.2/data_tools/gpt-oss-120b/subject_domain.trn.jsonl
+  validation_jsonl: /home/ihradis/projects/2025-05-11_semant_demo/semant-demo.2/data_tools/gpt-oss-120b/subject_domain.val.jsonl
+
+  # Or sharded files:
+  # train_jsonl:
+  #   - /data/reliability/train-00000.jsonl
+  #   - /data/reliability/train-00001.jsonl
+  # validation_jsonl:
+  #   - /data/reliability/validation-00000.jsonl
+
+  messages_field: messages
+  validate_messages: true
+
+  shuffle_train: true
+  shuffle_buffer_size: 3000
+
+  max_train_samples: null
+
+  # Important for huge validation files.
+  # Evaluation will stream only this many validation rows.
+  max_eval_samples: 500
+
+training:
+  method: full
+  output_dir: outputs/qwen35-0.8b
+
+  # Required for streaming datasets.
+  max_steps: 20000
+  num_train_epochs: 1
+
+  per_device_train_batch_size: 4
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 8
+
+  learning_rate: 0.00002
+  weight_decay: 0.0002
+  warmup_ratio: 0.03
+  lr_scheduler_type: cosine
+
+  logging_steps: 10
+  save_steps: 2000
+  eval_steps: 2000
+  eval_strategy: steps
+  save_strategy: steps
+  save_total_limit: 3
+
+  optim: adamw_8bit
+  bf16: true
+  fp16: false
+  gradient_checkpointing: false
+  max_grad_norm: 1.0
+
+  packing: false
+  assistant_only_loss: false
+  completion_only_loss: true
+  
+  # Usually leave null for Qwen3.5.
+  # Use --inspect-batch to verify labels are not all -100.
+  chat_template_path: null
+
+  report_to: []
+  resume_from_checkpoint: null
+  use_liger_kernel: false
+  #truncation_mode: keep_start
+  dataloader_num_workers: 0
+
+lora:
+  r: 16
+  lora_alpha: 16
+  lora_dropout: 0.0
+  bias: none
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+  use_gradient_checkpointing: unsloth
+  random_state: 3407
+  use_rslora: false
+  loftq_config: null
+  modules_to_save: null
+
+save:
+  save_final: true
+  final_dir_name: final
+  save_merged_16bit: false
+  merged_16bit_dir_name: merged_16bit
+  save_gguf: false
+  gguf_dir_name: gguf
+  gguf_quantization_method: q8_0
