@@ -32,6 +32,7 @@ import inspect
 import logging
 import os
 import sys
+import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional, Union
 
@@ -75,7 +76,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "eos_token": "auto",
         "pad_token": "auto",
     },
-
+    "logging": {
+        "log_token_counts": True,
+        "token_count_log_every": 10,
+    },
     "data": {
         "streaming": True,
 
@@ -191,6 +195,84 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "gguf_quantization_method": "q8_0",
     },
 }
+
+
+class TokenCountLoggingCollator:
+    """
+    Wraps an existing data collator and logs token-count statistics.
+
+    Works after SFTTrainer has constructed its own collator.
+    """
+
+    def __init__(
+        self,
+        base_collator: Any,
+        clearml_task: Optional[Any] = None,
+        log_every: int = 100,
+        log_prefix: str = "tokens",
+    ):
+        self.base_collator = base_collator
+        self.clearml_task = clearml_task
+        self.log_every = int(log_every)
+        self.log_prefix = log_prefix
+        self.call_idx = 0
+        self.logger = clearml_task.get_logger() if clearml_task is not None else None
+
+    def __call__(self, features):
+        batch = self.base_collator(features)
+        self.call_idx += 1
+
+        if self.log_every <= 0 or self.call_idx % self.log_every != 0:
+            return batch
+
+        attention_mask = batch.get("attention_mask")
+        labels = batch.get("labels")
+
+        if attention_mask is None or labels is None:
+            return batch
+
+        input_tokens = attention_mask.sum().item()
+        total_positions = attention_mask.numel()
+
+        supervised_tokens = labels.ne(-100).sum().item()
+        ignored_tokens = max(input_tokens - supervised_tokens, 0)
+        padding_tokens = max(total_positions - input_tokens, 0)
+
+        batch_size = labels.shape[0]
+        seq_len = labels.shape[1] if labels.ndim >= 2 else labels.numel()
+
+        supervised_ratio = supervised_tokens / input_tokens if input_tokens else 0.0
+        avg_input_tokens = input_tokens / batch_size if batch_size else 0.0
+        avg_supervised_tokens = supervised_tokens / batch_size if batch_size else 0.0
+
+        LOG.info(
+            "Token counts | batch=%d | input=%d | supervised=%d | ignored=%d | padding=%d | "
+            "supervised_ratio=%.4f | avg_input=%.1f | avg_supervised=%.1f | shape=(%d,%d)",
+            self.call_idx,
+            input_tokens,
+            supervised_tokens,
+            ignored_tokens,
+            padding_tokens,
+            supervised_ratio,
+            avg_input_tokens,
+            avg_supervised_tokens,
+            batch_size,
+            seq_len,
+        )
+
+        if self.logger is not None:
+            step = self.call_idx
+            self.logger.report_scalar(self.log_prefix, "input_tokens", input_tokens, iteration=step)
+            self.logger.report_scalar(self.log_prefix, "supervised_tokens", supervised_tokens, iteration=step)
+            self.logger.report_scalar(self.log_prefix, "ignored_tokens", ignored_tokens, iteration=step)
+            self.logger.report_scalar(self.log_prefix, "padding_tokens", padding_tokens, iteration=step)
+            self.logger.report_scalar(self.log_prefix, "supervised_ratio", supervised_ratio, iteration=step)
+            self.logger.report_scalar(self.log_prefix, "avg_input_tokens", avg_input_tokens, iteration=step)
+            self.logger.report_scalar(self.log_prefix, "avg_supervised_tokens", avg_supervised_tokens, iteration=step)
+
+        return batch
+    
+
 
 
 def setup_logging() -> None:
@@ -606,52 +688,60 @@ def count_parameters(model: Any) -> tuple[int, int]:
     return trainable, total
 
 
+def instantiate_sft_config(SFTConfig: Any, kwargs: Dict[str, Any]) -> Any:
+    kwargs = dict(kwargs)
+
+    while True:
+        try:
+            return SFTConfig(**kwargs)
+        except TypeError as exc:
+            match = re.search(r"unexpected keyword argument '([^']+)'", str(exc))
+            if not match:
+                raise
+
+            bad_key = match.group(1)
+            if bad_key not in kwargs:
+                raise
+
+            LOG.warning("Dropping unsupported SFTConfig argument: %s", bad_key)
+            kwargs.pop(bad_key)
+
+
 def make_sft_config(cfg: Dict[str, Any], tokenizer: Any, SFTConfig: Any) -> Any:
     training_cfg = copy.deepcopy(cfg["training"])
 
-    resume_from_checkpoint = training_cfg.pop("resume_from_checkpoint", None)
-    if resume_from_checkpoint is not None:
-        LOG.info("resume_from_checkpoint is used in trainer.train(), not SFTConfig.")
-
-    method = training_cfg.pop("method", None)
-    if method is not None:
-        pass
+    training_cfg.pop("resume_from_checkpoint", None)
+    training_cfg.pop("method", None)
+    training_cfg.pop("truncation_mode", None)
+    training_cfg.pop("dataset_text_field", None)
 
     max_seq_length = int(cfg["model"]["max_seq_length"])
 
-    # Ensure assistant-only masking is always active.
-    training_cfg["assistant_only_loss"] = True
+    # Important workaround for Qwen3.5 VLM detection.
+    training_cfg["assistant_only_loss"] = False
+    training_cfg["completion_only_loss"] = True
 
-    # Conversational datasets should not use dataset_text_field="text".
-    training_cfg.pop("dataset_text_field", None)
-
-    # Set EOS in SFTConfig when supported.
     if getattr(tokenizer, "eos_token", None):
         training_cfg["eos_token"] = tokenizer.eos_token
 
-    # TRL version compatibility: newer TRL uses max_length, older Unsloth examples use max_seq_length.
     sft_params = inspect.signature(SFTConfig.__init__).parameters
+
     if "max_length" in sft_params:
         training_cfg["max_length"] = max_seq_length
     elif "max_seq_length" in sft_params:
         training_cfg["max_seq_length"] = max_seq_length
 
-    # eval_strategy/evaluation_strategy compatibility.
     if "eval_strategy" in training_cfg and "eval_strategy" not in sft_params and "evaluation_strategy" in sft_params:
         training_cfg["evaluation_strategy"] = training_cfg.pop("eval_strategy")
     elif "evaluation_strategy" in training_cfg and "evaluation_strategy" not in sft_params and "eval_strategy" in sft_params:
         training_cfg["eval_strategy"] = training_cfg.pop("evaluation_strategy")
 
-    # Some TRL versions use report_to="none"; some accept [].
-    if training_cfg.get("report_to") is None:
-        training_cfg["report_to"] = []
-
     filtered = filter_kwargs(SFTConfig.__init__, training_cfg)
-    dropped = sorted(set(training_cfg) - set(filtered))
-    if dropped:
-        LOG.info("Dropping SFTConfig args unsupported by installed TRL: %s", dropped)
 
-    return SFTConfig(**filtered)
+    # Defensive drops for Unsloth compiled wrappers.
+    filtered.pop("truncation_mode", None)
+
+    return instantiate_sft_config(SFTConfig, filtered)
 
 
 def make_clearml_callback(task: Any):
@@ -707,6 +797,14 @@ def build_trainer(
 
     if clearml_task is not None:
         trainer.add_callback(make_clearml_callback(clearml_task))
+
+    if cfg.get("logging", {}).get("log_token_counts", True):
+        trainer.data_collator = TokenCountLoggingCollator(
+            base_collator=trainer.data_collator,
+            clearml_task=clearml_task,
+            log_every=int(cfg.get("logging", {}).get("token_count_log_every", 100)),
+            log_prefix="tokens/train",
+        )
 
     return trainer
 

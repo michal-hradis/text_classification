@@ -1,12 +1,12 @@
 project:
   name: reliability-signals
-  run_name: qwen35-4b-reliability-lora-streaming
+  run_name: qwen35-0.8b-all-full
   seed: 3407
 
 clearml:
   enabled: true
-  project_name: LLM/Test_LLM
-  task_name: qwen35-4b-reliability-lora-streaming
+  project_name: LLM/Classification
+  task_name: qwen35-0.8b-all-full
   output_uri: null
   tags:
     - unsloth
@@ -16,6 +16,7 @@ clearml:
 
 model:
   family: qwen3_5
+  #model_name: /home/ihradis/projects/2026-05-01_text_classification/text_classification/train_llm/outputs/qwen35-0.8b/checkpoint-8000
   model_name: unsloth/Qwen3.5-0.8B
   loader: auto
   max_seq_length: 2048
@@ -34,8 +35,8 @@ data:
   streaming: true
 
   # Can be a single file:
-  train_jsonl: /home/ihradis/projects/2025-05-11_semant_demo/semant-demo.2/data_tools/gpt-oss-120b/subject_domain.trn.jsonl
-  validation_jsonl: /home/ihradis/projects/2025-05-11_semant_demo/semant-demo.2/data_tools/gpt-oss-120b/subject_domain.val.jsonl
+  train_jsonl: /home/ihradis/projects/2025-05-11_semant_demo/semant-demo.2/data_tools/gpt-oss-120b/classification.short/trn.short.jsonl
+  validation_jsonl: /home/ihradis/projects/2025-05-11_semant_demo/semant-demo.2/data_tools/gpt-oss-120b/classification.short/val.short.jsonl
 
   # Or sharded files:
   # train_jsonl:
@@ -56,15 +57,19 @@ data:
   # Evaluation will stream only this many validation rows.
   max_eval_samples: 500
 
+logging:
+  log_token_counts: true
+  token_count_log_every: 10
+
 training:
   method: full
   output_dir: outputs/qwen35-0.8b
 
   # Required for streaming datasets.
-  max_steps: 20000
+  max_steps: 60000
   num_train_epochs: 1
 
-  per_device_train_batch_size: 4
+  per_device_train_batch_size: 16
   per_device_eval_batch_size: 1
   gradient_accumulation_steps: 8
 
@@ -74,8 +79,8 @@ training:
   lr_scheduler_type: cosine
 
   logging_steps: 10
-  save_steps: 2000
-  eval_steps: 2000
+  save_steps: 1000
+  eval_steps: 1000
   eval_strategy: steps
   save_strategy: steps
   save_total_limit: 3
@@ -83,13 +88,13 @@ training:
   optim: adamw_8bit
   bf16: true
   fp16: false
-  gradient_checkpointing: false
+  gradient_checkpointing: true
   max_grad_norm: 1.0
 
   packing: false
   assistant_only_loss: false
   completion_only_loss: true
-  
+
   # Usually leave null for Qwen3.5.
   # Use --inspect-batch to verify labels are not all -100.
   chat_template_path: null
