@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Streaming Unsloth SFT trainer for Gemma 4 and Qwen3.5.
 
@@ -30,249 +29,13 @@ import argparse
 import copy
 import inspect
 import logging
-import os
 import sys
 import re
-from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping, Optional, Union
-
-import yaml
-
-
-LOG = logging.getLogger("streaming_unsloth_sft")
-
-
-DEFAULT_CONFIG: Dict[str, Any] = {
-    "project": {
-        "name": "llm-sft",
-        "run_name": "streaming-unsloth-sft",
-        "seed": 3407,
-    },
-    "clearml": {
-        "enabled": True,
-        "project_name": "LLM/SFT",
-        "task_name": None,
-        "output_uri": None,
-        "tags": [],
-    },
-    "env": {},
-
-    "model": {
-        "family": "qwen3_5",  # qwen3_5, gemma4
-        "model_name": "unsloth/Qwen3.5-4B",
-        "loader": "auto",  # auto, fast_language_model, fast_model
-        "max_seq_length": 2048,
-        "dtype": "bfloat16",  # bfloat16, float16, float32, null
-        "trust_remote_code": True,
-        "device_map": None,
-        "fast_inference": None,
-
-        # Normalized from training.method.
-        "load_in_4bit": False,
-        "load_in_8bit": False,
-        "load_in_16bit": True,
-        "full_finetuning": False,
-
-        "eos_token": "auto",
-        "pad_token": "auto",
-    },
-    "logging": {
-        "log_token_counts": True,
-        "token_count_log_every": 10,
-    },
-    "data": {
-        "streaming": True,
-
-        # String or list of JSONL files. Lists are useful for sharded >10 GB datasets.
-        "train_jsonl": "data/train.jsonl",
-        "validation_jsonl": "data/validation.jsonl",
-
-        # Your file already uses "messages".
-        # If not, this script maps data.messages_field -> "messages".
-        "messages_field": "messages",
-
-        "validate_messages": True,
-
-        # Streaming shuffle is approximate and buffer-based.
-        "shuffle_train": True,
-        "shuffle_buffer_size": 10000,
-
-        # For huge validation files, keep this bounded.
-        # Set null to evaluate the entire validation stream.
-        "max_train_samples": None,
-        "max_eval_samples": 5000,
-    },
-
-    "training": {
-        "method": "lora",  # lora or full
-
-        "output_dir": "outputs/streaming-unsloth-sft",
-
-        # Required for streaming datasets because IterableDataset has no length.
-        "max_steps": 10000,
-        "num_train_epochs": 1,
-
-        "per_device_train_batch_size": 1,
-        "per_device_eval_batch_size": 1,
-        "gradient_accumulation_steps": 8,
-
-        "learning_rate": 2.0e-4,
-        "weight_decay": 0.0,
-        "warmup_ratio": 0.03,
-        "lr_scheduler_type": "cosine",
-
-        "logging_steps": 10,
-        "save_steps": 500,
-        "eval_steps": 500,
-        "eval_strategy": "steps",
-        "save_strategy": "steps",
-        "save_total_limit": 3,
-
-        "optim": "adamw_8bit",
-        "bf16": True,
-        "fp16": False,
-        "gradient_checkpointing": True,
-        "max_grad_norm": 1.0,
-
-        # Keep packing off for classification unless you verify masking behavior.
-        "packing": False,
-
-        # This is the key change.
-        "assistant_only_loss": True,
-
-        # TRL can set or patch templates through this.
-        # Usually leave null for Qwen3.5; TRL recognizes Qwen3.5 training templates.
-        # For Gemma 4, run --inspect-batch to verify nonzero supervised labels.
-        "chat_template_path": None,
-
-        # Use null/[] to avoid duplicate external logging. ClearML is handled manually.
-        "report_to": [],
-
-        # Optional checkpoint path or true.
-        "resume_from_checkpoint": None,
-
-        # Leave false unless you have verified compatibility with your TRL version.
-        "use_liger_kernel": False,
-
-        # Newer TRL uses max_length; older Unsloth examples use max_seq_length.
-        # The script maps model.max_seq_length to whichever argument exists.
-        #"truncation_mode": "keep_start",
-
-        # Dataloader workers for streaming. Increase only after verifying throughput.
-        "dataloader_num_workers": 0,
-    },
-
-    "lora": {
-        "r": 16,
-        "lora_alpha": 16,
-        "lora_dropout": 0.0,
-        "bias": "none",
-        "target_modules": [
-            "q_proj",
-            "k_proj",
-            "v_proj",
-            "o_proj",
-            "gate_proj",
-            "up_proj",
-            "down_proj",
-        ],
-        "use_gradient_checkpointing": "unsloth",
-        "random_state": 3407,
-        "use_rslora": False,
-        "loftq_config": None,
-        "modules_to_save": None,
-    },
-
-    "save": {
-        "save_final": True,
-        "final_dir_name": "final",
-
-        "save_merged_16bit": False,
-        "merged_16bit_dir_name": "merged_16bit",
-
-        "save_gguf": False,
-        "gguf_dir_name": "gguf",
-        "gguf_quantization_method": "q8_0",
-    },
-}
-
-
-class TokenCountLoggingCollator:
-    """
-    Wraps an existing data collator and logs token-count statistics.
-
-    Works after SFTTrainer has constructed its own collator.
-    """
-
-    def __init__(
-        self,
-        base_collator: Any,
-        clearml_task: Optional[Any] = None,
-        log_every: int = 100,
-        log_prefix: str = "tokens",
-    ):
-        self.base_collator = base_collator
-        self.clearml_task = clearml_task
-        self.log_every = int(log_every)
-        self.log_prefix = log_prefix
-        self.call_idx = 0
-        self.logger = clearml_task.get_logger() if clearml_task is not None else None
-
-    def __call__(self, features):
-        batch = self.base_collator(features)
-        self.call_idx += 1
-
-        if self.log_every <= 0 or self.call_idx % self.log_every != 0:
-            return batch
-
-        attention_mask = batch.get("attention_mask")
-        labels = batch.get("labels")
-
-        if attention_mask is None or labels is None:
-            return batch
-
-        input_tokens = attention_mask.sum().item()
-        total_positions = attention_mask.numel()
-
-        supervised_tokens = labels.ne(-100).sum().item()
-        ignored_tokens = max(input_tokens - supervised_tokens, 0)
-        padding_tokens = max(total_positions - input_tokens, 0)
-
-        batch_size = labels.shape[0]
-        seq_len = labels.shape[1] if labels.ndim >= 2 else labels.numel()
-
-        supervised_ratio = supervised_tokens / input_tokens if input_tokens else 0.0
-        avg_input_tokens = input_tokens / batch_size if batch_size else 0.0
-        avg_supervised_tokens = supervised_tokens / batch_size if batch_size else 0.0
-
-        LOG.info(
-            "Token counts | batch=%d | input=%d | supervised=%d | ignored=%d | padding=%d | "
-            "supervised_ratio=%.4f | avg_input=%.1f | avg_supervised=%.1f | shape=(%d,%d)",
-            self.call_idx,
-            input_tokens,
-            supervised_tokens,
-            ignored_tokens,
-            padding_tokens,
-            supervised_ratio,
-            avg_input_tokens,
-            avg_supervised_tokens,
-            batch_size,
-            seq_len,
-        )
-
-        if self.logger is not None:
-            step = self.call_idx
-            self.logger.report_scalar(self.log_prefix, "input_tokens", input_tokens, iteration=step)
-            self.logger.report_scalar(self.log_prefix, "supervised_tokens", supervised_tokens, iteration=step)
-            self.logger.report_scalar(self.log_prefix, "ignored_tokens", ignored_tokens, iteration=step)
-            self.logger.report_scalar(self.log_prefix, "padding_tokens", padding_tokens, iteration=step)
-            self.logger.report_scalar(self.log_prefix, "supervised_ratio", supervised_ratio, iteration=step)
-            self.logger.report_scalar(self.log_prefix, "avg_input_tokens", avg_input_tokens, iteration=step)
-            self.logger.report_scalar(self.log_prefix, "avg_supervised_tokens", avg_supervised_tokens, iteration=step)
-
-        return batch
-    
-
+from typing import Any, Dict, Iterable, Optional, Union
+from utils import save_outputs, LOG, set_environment
+from torch_utils import torch_dtype_from_string, count_parameters
+from config import load_config
+from data import TokenCountLoggingCollator, inspect_first_batch, messages_to_prompt_completion
 
 
 def setup_logging() -> None:
@@ -302,99 +65,11 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def deep_update(base: Dict[str, Any], updates: Mapping[str, Any]) -> Dict[str, Any]:
-    out = copy.deepcopy(base)
-    for key, value in updates.items():
-        if isinstance(value, Mapping) and isinstance(out.get(key), dict):
-            out[key] = deep_update(out[key], value)
-        else:
-            out[key] = value
-    return out
-
-
-def parse_scalar(value: str) -> Any:
-    try:
-        return yaml.safe_load(value)
-    except yaml.YAMLError:
-        return value
-
-
-def apply_dot_overrides(cfg: Dict[str, Any], overrides: Iterable[str]) -> Dict[str, Any]:
-    cfg = copy.deepcopy(cfg)
-    for override in overrides:
-        if "=" not in override:
-            raise ValueError(f"Bad override {override!r}; expected key.path=value.")
-        key_path, raw_value = override.split("=", 1)
-        keys = key_path.split(".")
-        target = cfg
-        for key in keys[:-1]:
-            if key not in target or not isinstance(target[key], dict):
-                target[key] = {}
-            target = target[key]
-        target[keys[-1]] = parse_scalar(raw_value)
-    return cfg
-
-
-def load_config(path: str, overrides: Iterable[str]) -> Dict[str, Any]:
-    with open(path, "r", encoding="utf-8") as f:
-        user_cfg = yaml.safe_load(f) or {}
-
-    cfg = deep_update(DEFAULT_CONFIG, user_cfg)
-    cfg = apply_dot_overrides(cfg, overrides)
-    return normalize_config(cfg)
-
-
-def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
-    method = str(cfg["training"]["method"]).strip().lower()
-    if method not in {"lora", "full"}:
-        raise ValueError("training.method must be 'lora' or 'full'.")
-    cfg["training"]["method"] = method
-
-    if cfg["clearml"]["task_name"] is None:
-        cfg["clearml"]["task_name"] = cfg["project"]["run_name"]
-
-    if method == "full":
-        cfg["model"]["full_finetuning"] = True
-        cfg["model"]["load_in_4bit"] = False
-        cfg["model"]["load_in_8bit"] = False
-        cfg["model"]["load_in_16bit"] = False
-    else:
-        cfg["model"]["full_finetuning"] = False
-        if not any(
-            bool(cfg["model"].get(flag))
-            for flag in ("load_in_4bit", "load_in_8bit", "load_in_16bit")
-        ):
-            cfg["model"]["load_in_16bit"] = True
-
-    true_modes = [
-        name
-        for name in ("load_in_4bit", "load_in_8bit", "load_in_16bit", "full_finetuning")
-        if bool(cfg["model"].get(name))
-    ]
-    if len(true_modes) > 1:
-        raise ValueError(f"Only one load/training mode may be true. Got: {true_modes}")
-
-    if cfg["data"].get("streaming", True):
-        max_steps = int(cfg["training"].get("max_steps", -1))
-        if max_steps <= 0:
-            raise ValueError(
-                "With data.streaming=true, set training.max_steps > 0. "
-                "Streaming IterableDataset has no reliable __len__."
-            )
-
-    if not cfg["data"].get("validation_jsonl"):
-        cfg["training"]["eval_strategy"] = "no"
-
-    return cfg
-
-
-def set_environment(cfg: Dict[str, Any]) -> None:
-    for key, value in (cfg.get("env") or {}).items():
-        if value is not None:
-            os.environ[str(key)] = str(value)
-
-
 def filter_kwargs(callable_obj: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Filter a kwargs dict to only those accepted by the callable_obj, based on its signature. If the
+    callable accepts **kwargs, all non-None values are returned. Otherwise, only the parameters
+    explicitly defined in the callable's signature are returned.
+    """
     signature = inspect.signature(callable_obj)
     has_var_kwargs = any(
         p.kind == inspect.Parameter.VAR_KEYWORD
@@ -409,31 +84,15 @@ def filter_kwargs(callable_obj: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def torch_dtype_from_string(torch_module: Any, dtype_name: Optional[str]) -> Optional[Any]:
-    if dtype_name is None:
-        return None
-
-    dtype_name = str(dtype_name).lower()
-    mapping = {
-        "bf16": torch_module.bfloat16,
-        "bfloat16": torch_module.bfloat16,
-        "fp16": torch_module.float16,
-        "float16": torch_module.float16,
-        "half": torch_module.float16,
-        "fp32": torch_module.float32,
-        "float32": torch_module.float32,
-    }
-    if dtype_name not in mapping:
-        raise ValueError(f"Unsupported dtype: {dtype_name}")
-    return mapping[dtype_name]
-
-
 def is_moe_like_model_name(model_name: str) -> bool:
     lowered = model_name.lower()
     return any(token in lowered for token in ("a3b", "a4b", "a10b", "a17b", "moe"))
 
 
-def choose_unsloth_loader(cfg: Dict[str, Any], fast_language_model: Any, fast_model: Any) -> Any:
+def choose_unsloth_loader(cfg: dict[str, Any], fast_language_model: Any, fast_model: Any) -> Any:
+    """
+    Determines which Unsloth loader class to use based on config and model name heuristics.
+    """
     loader = str(cfg["model"].get("loader", "auto")).lower()
     model_name = cfg["model"]["model_name"]
 
@@ -452,7 +111,7 @@ def choose_unsloth_loader(cfg: Dict[str, Any], fast_language_model: Any, fast_mo
     return fast_language_model
 
 
-def init_clearml(cfg: Dict[str, Any], config_path: str) -> Optional[Any]:
+def init_clearml(cfg: dict[str, Any], config_path: str) -> Optional[Any]:
     if not cfg["clearml"].get("enabled", True):
         return None
 
@@ -482,7 +141,62 @@ def init_clearml(cfg: Dict[str, Any], config_path: str) -> Optional[Any]:
     return task
 
 
-def configure_tokenizer(tokenizer: Any, cfg: Dict[str, Any]) -> None:
+def get_inner_tokenizer(processing_class: Any) -> Any:
+    """
+    For VLM processors, return the wrapped tokenizer.
+    For normal text models, return the tokenizer itself.
+    """
+    return getattr(processing_class, "tokenizer", processing_class)
+
+
+def configure_chat_template(processing_class: Any, cfg: dict[str, Any]) -> Any:
+    """
+    Ensure tokenizer/processor has a chat_template.
+    Needed especially for Gemma 4 processor-based models.
+    """
+    family = str(cfg["model"].get("family", "")).lower()
+    chat_template = cfg["model"].get("chat_template")
+
+    if chat_template is None and family == "gemma4":
+        chat_template = "gemma-4"
+
+    if chat_template is None:
+        return processing_class
+
+    from unsloth.chat_templates import get_chat_template
+
+    inner = get_inner_tokenizer(processing_class)
+
+    updated_inner = get_chat_template(
+        inner,
+        chat_template=chat_template,
+    )
+
+    # If get_chat_template returned a new tokenizer object, preserve it.
+    if hasattr(processing_class, "tokenizer"):
+        processing_class.tokenizer = updated_inner
+        if getattr(updated_inner, "chat_template", None):
+            processing_class.chat_template = updated_inner.chat_template
+    else:
+        processing_class = updated_inner
+
+    if not getattr(processing_class, "chat_template", None):
+        raise RuntimeError(
+            f"No chat_template is set after applying {chat_template!r}. "
+            "Check model.chat_template and the loaded tokenizer/processor type."
+        )
+
+    LOG.info("Applied chat template: %s", chat_template)
+    return processing_class
+
+
+def configure_tokenizer(processing_class: Any, cfg: dict[str, Any]) -> Any:
+    """
+    Configure EOS/PAD tokens on the actual tokenizer.
+    Works for both normal tokenizers and processor-wrapped tokenizers.
+    """
+    tokenizer = get_inner_tokenizer(processing_class)
+
     family = str(cfg["model"].get("family", "")).lower()
     eos_setting = cfg["model"].get("eos_token", "auto")
     pad_setting = cfg["model"].get("pad_token", "auto")
@@ -495,8 +209,8 @@ def configure_tokenizer(tokenizer: Any, cfg: Dict[str, Any]) -> None:
             if token_id is not None and token_id != tokenizer.unk_token_id:
                 tokenizer.eos_token = "<|im_end|>"
                 LOG.info("Set Qwen EOS token to <|im_end|>.")
-        except Exception:
-            LOG.warning("Could not auto-set Qwen EOS token; using tokenizer default.")
+        except Exception as exc:
+            LOG.warning("Could not auto-set Qwen EOS token; using tokenizer default. Error: %s", exc)
 
     if pad_setting and pad_setting != "auto":
         tokenizer.pad_token = pad_setting
@@ -504,49 +218,26 @@ def configure_tokenizer(tokenizer: Any, cfg: Dict[str, Any]) -> None:
         tokenizer.pad_token = tokenizer.eos_token
         LOG.info("Set pad_token to eos_token.")
 
+    # Mirror fields onto the processor when possible.
+    if hasattr(processing_class, "tokenizer"):
+        for attr in ("eos_token", "eos_token_id", "pad_token", "pad_token_id"):
+            if hasattr(tokenizer, attr):
+                try:
+                    setattr(processing_class, attr, getattr(tokenizer, attr))
+                except Exception:
+                    pass
 
-def validate_messages(messages: Any) -> None:
-    if not isinstance(messages, list) or not messages:
-        raise ValueError("messages must be a non-empty list.")
+    LOG.info("tokenizer type: %s", type(tokenizer))
+    LOG.info("eos_token: %r / %r", getattr(tokenizer, "eos_token", None), getattr(tokenizer, "eos_token_id", None))
+    LOG.info("pad_token: %r / %r", getattr(tokenizer, "pad_token", None), getattr(tokenizer, "pad_token_id", None))
+    LOG.info("chat_template set: %s", bool(getattr(processing_class, "chat_template", None)))
 
-    allowed_roles = {"system", "user", "assistant", "tool"}
-
-    for idx, message in enumerate(messages):
-        if not isinstance(message, dict):
-            raise ValueError(f"message {idx} is not an object.")
-        role = message.get("role")
-        if role not in allowed_roles:
-            raise ValueError(f"message {idx} has unsupported role: {role!r}")
-        if "content" not in message:
-            raise ValueError(f"message {idx} is missing content.")
-
-    if messages[-1].get("role") != "assistant":
-        raise ValueError("last message must be an assistant message for SFT.")
-
-
-def normalize_prompt_completion_example(
-    example: Dict[str, Any],
-    messages_field: str,
-    do_validate: bool,
-) -> Dict[str, Any]:
-    messages = example[messages_field]
-
-    if do_validate:
-        validate_messages(messages)
-
-    if messages[-1]["role"] != "assistant":
-        raise ValueError("Last message must be assistant.")
-
-    prompt = messages[:-1]
-    completion = [messages[-1]]
-
-    return {
-        "prompt": prompt,
-        "completion": completion,
-    }
+    return processing_class
+        
 
 
 def maybe_take(dataset: Any, n: Optional[int], streaming: bool) -> Any:
+    """If n is not None, return a dataset with at most n examples. Uses streaming-friendly .take() if streaming, otherwise .select()."""
     if n is None:
         return dataset
     n = int(n)
@@ -557,7 +248,8 @@ def maybe_take(dataset: Any, n: Optional[int], streaming: bool) -> Any:
     return dataset.select(range(min(n, len(dataset))))
 
 
-def load_one_split(cfg: Dict[str, Any], split_name: str, data_files: Union[str, list[str]]) -> Any:
+def load_one_split(cfg: dict[str, Any], split_name: str, data_files: Union[str, list[str]]) -> Any:
+    """Load one dataset split from JSONL files, with optional streaming and shuffling."""
     from datasets import load_dataset
 
     streaming = bool(cfg["data"].get("streaming", True))
@@ -588,13 +280,14 @@ def load_one_split(cfg: Dict[str, Any], split_name: str, data_files: Union[str, 
         dataset = maybe_take(dataset, cfg["data"].get("max_eval_samples"), streaming)
 
     dataset = dataset.map(
-        lambda ex: normalize_prompt_completion_example(ex, messages_field, do_validate),
+        lambda ex: messages_to_prompt_completion(ex, messages_field, do_validate),
     )
 
     return dataset
 
 
-def load_streaming_datasets(cfg: Dict[str, Any]) -> Dict[str, Any]:
+def load_streaming_datasets(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Load training and validation datasets with optional streaming."""
     train_dataset = load_one_split(cfg, "train", cfg["data"]["train_jsonl"])
 
     eval_dataset = None
@@ -608,7 +301,8 @@ def load_streaming_datasets(cfg: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def load_model_and_tokenizer(cfg: Dict[str, Any]) -> tuple[Any, Any, Any]:
+def load_model_and_tokenizer(cfg: dict[str, Any]) -> tuple[Any, Any, Any]:
+    """Load a model and its tokenizer based on the provided configuration."""
     # Import Unsloth before importing TRL/Transformers training components.
     from unsloth import FastLanguageModel
 
@@ -640,7 +334,9 @@ def load_model_and_tokenizer(cfg: Dict[str, Any]) -> tuple[Any, Any, Any]:
         **filter_kwargs(loader_cls.from_pretrained, load_kwargs)
     )
 
-    configure_tokenizer(tokenizer, cfg)
+    tokenizer = configure_chat_template(tokenizer, cfg)
+    tokenizer = configure_tokenizer(tokenizer, cfg)
+
 
     if cfg["training"]["method"] == "lora":
         lora_kwargs = {
@@ -674,21 +370,17 @@ def load_model_and_tokenizer(cfg: Dict[str, Any]) -> tuple[Any, Any, Any]:
     pct = 100.0 * trainable / total if total else 0.0
     LOG.info("Trainable parameters: %d / %d (%.4f%%)", trainable, total, pct)
 
+    LOG.info("tokenizer type: %s", type(tokenizer))
+    LOG.info("tokenizer.chat_template exists: %s", bool(getattr(tokenizer, "chat_template", None)))
+    LOG.info("processor.chat_template exists: %s", bool(getattr(tokenizer, "chat_template", None)))
+    LOG.info("model config model_type: %s", getattr(model.config, "model_type", None))
+    LOG.info("model config architectures: %s", getattr(model.config, "architectures", None))
+
     return model, tokenizer, loader_cls
 
 
-def count_parameters(model: Any) -> tuple[int, int]:
-    trainable = 0
-    total = 0
-    for param in model.parameters():
-        n = param.numel()
-        total += n
-        if param.requires_grad:
-            trainable += n
-    return trainable, total
-
-
-def instantiate_sft_config(SFTConfig: Any, kwargs: Dict[str, Any]) -> Any:
+def instantiate_sft_config(SFTConfig: Any, kwargs: dict[str, Any]) -> Any:
+    """Instantiate an SFTConfig object, dropping unsupported arguments."""
     kwargs = dict(kwargs)
 
     while True:
@@ -708,6 +400,14 @@ def instantiate_sft_config(SFTConfig: Any, kwargs: Dict[str, Any]) -> Any:
 
 
 def make_sft_config(cfg: Dict[str, Any], tokenizer: Any, SFTConfig: Any) -> Any:
+    """Create an SFTConfig object from the training config, applying necessary transformations and filtering.
+    This function handles mapping config keys to the appropriate SFTConfig parameters, applying defaults, 
+    and dropping unsupported parameters based on the SFTConfig signature. 
+    It also includes workarounds for specific model requirements, 
+    such as ensuring the correct EOS token is set and adjusting for different SFTConfig versions. 
+
+    The resulting SFTConfig object is ready to be passed to the SFTTrainer.
+    """
     training_cfg = copy.deepcopy(cfg["training"])
 
     training_cfg.pop("resume_from_checkpoint", None)
@@ -745,6 +445,7 @@ def make_sft_config(cfg: Dict[str, Any], tokenizer: Any, SFTConfig: Any) -> Any:
 
 
 def make_clearml_callback(task: Any):
+    """Create a ClearML callback for logging trainer metrics to the ClearML dashboard."""
     from transformers import TrainerCallback
 
     class ClearMLScalarCallback(TrainerCallback):
@@ -774,6 +475,7 @@ def build_trainer(
     datasets: Dict[str, Any],
     clearml_task: Optional[Any],
 ) -> Any:
+    """Build and return an SFTTrainer based on the provided model, tokenizer, datasets, and configuration."""
     from trl import SFTConfig, SFTTrainer
 
     sft_args = make_sft_config(cfg, tokenizer, SFTConfig)
@@ -807,93 +509,6 @@ def build_trainer(
         )
 
     return trainer
-
-
-def inspect_first_batch(trainer: Any, tokenizer: Any) -> None:
-    import torch
-
-    LOG.info("Inspecting first train dataloader batch.")
-    batch = next(iter(trainer.get_train_dataloader()))
-
-    labels = batch.get("labels")
-    input_ids = batch.get("input_ids")
-
-    if labels is None:
-        raise RuntimeError("Batch has no labels. SFTTrainer did not prepare labels.")
-
-    labels_tensor = labels if torch.is_tensor(labels) else torch.tensor(labels)
-    supervised = labels_tensor.ne(-100).sum().item()
-    total = labels_tensor.numel()
-    pct = 100.0 * supervised / total if total else 0.0
-
-    LOG.info("Supervised labels: %d / %d (%.4f%%)", supervised, total, pct)
-
-    if supervised == 0:
-        raise RuntimeError(
-            "All labels are -100. assistant_only_loss masking failed. "
-            "Check that the model chat template has {% generation %} markers or set training.chat_template_path."
-        )
-
-    if input_ids is not None:
-        input_tensor = input_ids if torch.is_tensor(input_ids) else torch.tensor(input_ids)
-        first_ids = input_tensor[0].detach().cpu().tolist()
-        label_ids = labels_tensor[0].detach().cpu().tolist()
-
-        decoded_input = tokenizer.decode(first_ids[:512], skip_special_tokens=False)
-
-        supervised_token_ids = [
-            token_id
-            for token_id, label_id in zip(first_ids, label_ids)
-            if label_id != -100
-        ]
-        decoded_supervised = tokenizer.decode(supervised_token_ids[:256], skip_special_tokens=False)
-
-        LOG.info("First example rendered prefix:\n%s", decoded_input)
-        LOG.info("First example supervised-token prefix:\n%s", decoded_supervised)
-
-
-def save_outputs(cfg: Dict[str, Any], model: Any, tokenizer: Any, trainer: Any, clearml_task: Optional[Any]) -> None:
-    output_dir = Path(cfg["training"]["output_dir"])
-    save_cfg = cfg.get("save") or {}
-
-    if save_cfg.get("save_final", True):
-        final_dir = output_dir / save_cfg.get("final_dir_name", "final")
-        final_dir.mkdir(parents=True, exist_ok=True)
-        LOG.info("Saving final trainer/model output to %s", final_dir)
-        trainer.save_model(str(final_dir))
-        tokenizer.save_pretrained(str(final_dir))
-
-    if save_cfg.get("save_merged_16bit", False):
-        merged_dir = output_dir / save_cfg.get("merged_16bit_dir_name", "merged_16bit")
-        merged_dir.mkdir(parents=True, exist_ok=True)
-
-        if hasattr(model, "save_pretrained_merged"):
-            LOG.info("Saving merged 16-bit model to %s", merged_dir)
-            model.save_pretrained_merged(
-                str(merged_dir),
-                tokenizer,
-                save_method="merged_16bit",
-            )
-        else:
-            LOG.warning("save_pretrained_merged is unavailable; skipping merged save.")
-
-    if save_cfg.get("save_gguf", False):
-        gguf_dir = output_dir / save_cfg.get("gguf_dir_name", "gguf")
-        gguf_dir.mkdir(parents=True, exist_ok=True)
-
-        if hasattr(model, "save_pretrained_gguf"):
-            quant = save_cfg.get("gguf_quantization_method", "q8_0")
-            LOG.info("Saving GGUF to %s with quantization=%s", gguf_dir, quant)
-            model.save_pretrained_gguf(
-                str(gguf_dir),
-                tokenizer,
-                quantization_method=quant,
-            )
-        else:
-            LOG.warning("save_pretrained_gguf is unavailable; skipping GGUF save.")
-
-    if clearml_task is not None:
-        clearml_task.upload_artifact("resolved_config", cfg)
 
 
 def main() -> None:
