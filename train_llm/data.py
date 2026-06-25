@@ -1,5 +1,49 @@
+from pathlib import Path
 from typing import Any, Optional
 from utils import LOG
+
+
+def content_to_text(content: Any, image_placeholder: str = "[IMAGE]") -> str:
+    """
+    Convert either plain string content or typed multimodal content blocks to text.
+
+    Text-only models generally expect message["content"] to be a string. This lets
+    the raw dataset use the richer block format while preserving the existing
+    text-only trainer path.
+    """
+    if isinstance(content, str):
+        return content
+
+    if not isinstance(content, list):
+        raise ValueError(f"message content must be a string or list of blocks, got {type(content)}.")
+
+    parts: list[str] = []
+    for block in content:
+        if not isinstance(block, dict):
+            raise ValueError("content blocks must be objects.")
+
+        block_type = block.get("type")
+        if block_type == "text":
+            text = block.get("text", "")
+            if not isinstance(text, str):
+                raise ValueError("text content block must have a string 'text' field.")
+            parts.append(text)
+        elif block_type == "image":
+            parts.append(image_placeholder)
+        else:
+            raise ValueError(f"unsupported content block type: {block_type!r}")
+
+    return "\n".join(part for part in parts if part)
+
+
+def normalize_messages_for_text(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            **message,
+            "content": content_to_text(message["content"]),
+        }
+        for message in messages
+    ]
 
 
 def messages_to_prompt_completion(
@@ -14,13 +58,14 @@ def messages_to_prompt_completion(
     messages = example[messages_field]
 
     if do_validate:
-        validate_messages(messages)
+        validate_messages(messages, allow_images=True)
 
     if messages[-1]["role"] != "assistant":
         raise ValueError("Last message must be assistant.")
 
-    prompt = messages[:-1]
-    completion = [messages[-1]]
+    normalized_messages = normalize_messages_for_text(messages)
+    prompt = normalized_messages[:-1]
+    completion = [normalized_messages[-1]]
 
     return {
         "prompt": prompt,
@@ -28,7 +73,102 @@ def messages_to_prompt_completion(
     }
 
 
-def validate_messages(messages: Any) -> None:
+def resolve_image_path(path: str, image_root: Optional[str]) -> Path:
+    image_path = Path(path)
+    if image_path.is_absolute():
+        return image_path
+    if image_root:
+        return Path(image_root) / image_path
+    return image_path
+
+
+def load_image(path: str, image_root: Optional[str]) -> Any:
+    from PIL import Image
+
+    resolved = resolve_image_path(path, image_root)
+    return Image.open(resolved).convert("RGB")
+
+
+def content_to_vlm_blocks(content: Any, image_root: Optional[str], images: list[Any]) -> list[dict[str, Any]]:
+    """
+    Convert raw content to TRL-style VLM blocks.
+
+    Raw image blocks use {"type": "image", "path": "..."} so the dataset records
+    where each image belongs. Trainer-facing blocks use {"type": "image"} and the
+    loaded image is appended to the parallel images list in the same order.
+    """
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}]
+
+    if not isinstance(content, list):
+        raise ValueError(f"message content must be a string or list of blocks, got {type(content)}.")
+
+    blocks: list[dict[str, Any]] = []
+    for block in content:
+        if not isinstance(block, dict):
+            raise ValueError("content blocks must be objects.")
+
+        block_type = block.get("type")
+        if block_type == "text":
+            text = block.get("text", "")
+            if not isinstance(text, str):
+                raise ValueError("text content block must have a string 'text' field.")
+            blocks.append({"type": "text", "text": text})
+        elif block_type == "image":
+            image_obj = block.get("image")
+            image_path = block.get("path")
+
+            if image_obj is not None:
+                images.append(image_obj)
+            elif isinstance(image_path, str):
+                images.append(load_image(image_path, image_root))
+            else:
+                raise ValueError("image content block must have either an 'image' object or a string 'path'.")
+
+            blocks.append({"type": "image"})
+        else:
+            raise ValueError(f"unsupported content block type: {block_type!r}")
+
+    return blocks
+
+
+def messages_to_vlm_prompt_completion(
+    example: dict[str, Any],
+    messages_field: str,
+    do_validate: bool,
+    image_root: Optional[str] = None,
+) -> dict[str, Any]:
+    """
+    Convert conversational examples to prompt/completion plus TRL-style images.
+
+    The raw format may mix text and image blocks in message content. Image blocks
+    should normally be {"type": "image", "path": "relative/or/absolute.jpg"}.
+    """
+    messages = example[messages_field]
+
+    if do_validate:
+        validate_messages(messages, allow_images=True)
+
+    if messages[-1]["role"] != "assistant":
+        raise ValueError("Last message must be assistant.")
+
+    images: list[Any] = []
+    normalized_messages = [
+        {
+            **message,
+            "content": content_to_vlm_blocks(message["content"], image_root, images),
+        }
+        for message in messages
+    ]
+
+    return {
+        "prompt": normalized_messages[:-1],
+        "completion": [normalized_messages[-1]],
+        "images": images,
+    }
+
+
+def validate_messages(messages: Any, allow_images: bool = False) -> None:
     """
     Checks that the messages list is a valid conversational format for SFT.
     """
@@ -45,9 +185,41 @@ def validate_messages(messages: Any) -> None:
             raise ValueError(f"message {idx} has unsupported role: {role!r}")
         if "content" not in message:
             raise ValueError(f"message {idx} is missing content.")
+        validate_content(message["content"], allow_images=allow_images, message_idx=idx)
 
     if messages[-1].get("role") != "assistant":
         raise ValueError("last message must be an assistant message for SFT.")
+
+
+def validate_content(content: Any, allow_images: bool, message_idx: int) -> None:
+    if isinstance(content, str):
+        return
+
+    if not isinstance(content, list):
+        raise ValueError(f"message {message_idx} content must be a string or a list of blocks.")
+
+    for block_idx, block in enumerate(content):
+        if not isinstance(block, dict):
+            raise ValueError(f"message {message_idx} content block {block_idx} is not an object.")
+
+        block_type = block.get("type")
+        if block_type == "text":
+            if not isinstance(block.get("text"), str):
+                raise ValueError(
+                    f"message {message_idx} content block {block_idx} must have a string 'text' field."
+                )
+        elif block_type == "image":
+            if not allow_images:
+                raise ValueError(
+                    f"message {message_idx} content block {block_idx} is an image, "
+                    "but data.format is text-only."
+                )
+            if "path" not in block and "image" not in block:
+                raise ValueError(
+                    f"message {message_idx} content block {block_idx} must have 'path' or 'image'."
+                )
+        else:
+            raise ValueError(f"message {message_idx} content block {block_idx} has unsupported type: {block_type!r}")
 
 
 class TokenCountLoggingCollator:
@@ -131,6 +303,7 @@ def inspect_first_batch(trainer: Any, tokenizer: Any) -> None:
 
     LOG.info("Inspecting first train dataloader batch.")
     batch = next(iter(trainer.get_train_dataloader()))
+    LOG.info("First batch keys: %s", sorted(batch.keys()))
 
     labels = batch.get("labels")
     input_ids = batch.get("input_ids")
@@ -152,18 +325,19 @@ def inspect_first_batch(trainer: Any, tokenizer: Any) -> None:
         )
 
     if input_ids is not None:
+        decode_tokenizer = getattr(tokenizer, "tokenizer", tokenizer)
         input_tensor = input_ids if torch.is_tensor(input_ids) else torch.tensor(input_ids)
         first_ids = input_tensor[0].detach().cpu().tolist()
         label_ids = labels_tensor[0].detach().cpu().tolist()
 
-        decoded_input = tokenizer.decode(first_ids[:512], skip_special_tokens=False)
+        decoded_input = decode_tokenizer.decode(first_ids[:512], skip_special_tokens=False)
 
         supervised_token_ids = [
             token_id
             for token_id, label_id in zip(first_ids, label_ids)
             if label_id != -100
         ]
-        decoded_supervised = tokenizer.decode(supervised_token_ids[:256], skip_special_tokens=False)
+        decoded_supervised = decode_tokenizer.decode(supervised_token_ids[:256], skip_special_tokens=False)
 
         LOG.info("First example rendered prefix:\n%s", decoded_input)
         LOG.info("First example supervised-token prefix:\n%s", decoded_supervised)

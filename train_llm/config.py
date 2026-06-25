@@ -51,6 +51,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # If not, this script maps data.messages_field -> "messages".
         "messages_field": "messages",
 
+        # text_prompt_completion keeps the existing text-only training path.
+        # vlm_prompt_completion keeps typed content blocks and loads images for VLM training.
+        "format": "text_prompt_completion",
+        "image_root": None,
+
         "validate_messages": True,
 
         # Streaming shuffle is approximate and buffer-based.
@@ -240,6 +245,11 @@ def normalize_config(cfg: dict[str, Any]) -> dict[str, Any]:
                 "With data.streaming=true, set training.max_steps > 0. "
                 "Streaming IterableDataset has no reliable __len__."
             )
+
+    data_format = str(cfg["data"].get("format", "text_prompt_completion")).strip().lower()
+    if data_format not in {"text_prompt_completion", "vlm_prompt_completion"}:
+        raise ValueError("data.format must be 'text_prompt_completion' or 'vlm_prompt_completion'.")
+    cfg["data"]["format"] = data_format
 
     if not cfg["data"].get("validation_jsonl"):
         cfg["training"]["eval_strategy"] = "no"

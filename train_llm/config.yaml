@@ -46,6 +46,8 @@ data:
   #   - /data/reliability/validation-00000.jsonl
 
   messages_field: messages
+  format: text_prompt_completion
+  image_root: null
   validate_messages: true
 
   shuffle_train: true

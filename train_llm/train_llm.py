@@ -35,7 +35,12 @@ from typing import Any, Dict, Iterable, Optional, Union
 from utils import save_outputs, LOG, set_environment
 from torch_utils import torch_dtype_from_string, count_parameters
 from config import load_config
-from data import TokenCountLoggingCollator, inspect_first_batch, messages_to_prompt_completion
+from data import (
+    TokenCountLoggingCollator,
+    inspect_first_batch,
+    messages_to_prompt_completion,
+    messages_to_vlm_prompt_completion,
+)
 
 
 def setup_logging() -> None:
@@ -248,13 +253,35 @@ def maybe_take(dataset: Any, n: Optional[int], streaming: bool) -> Any:
     return dataset.select(range(min(n, len(dataset))))
 
 
+def get_dataset_mapper(cfg: dict[str, Any]) -> Any:
+    data_format = str(cfg["data"].get("format", "text_prompt_completion")).strip().lower()
+    messages_field = cfg["data"].get("messages_field", "messages")
+    do_validate = bool(cfg["data"].get("validate_messages", True))
+
+    if data_format == "text_prompt_completion":
+        return lambda ex: messages_to_prompt_completion(ex, messages_field, do_validate)
+
+    if data_format == "vlm_prompt_completion":
+        image_root = cfg["data"].get("image_root")
+        return lambda ex: messages_to_vlm_prompt_completion(
+            ex,
+            messages_field,
+            do_validate,
+            image_root=image_root,
+        )
+
+    raise ValueError(
+        "data.format must be one of: text_prompt_completion, vlm_prompt_completion. "
+        f"Got {data_format!r}."
+    )
+
+
 def load_one_split(cfg: dict[str, Any], split_name: str, data_files: Union[str, list[str]]) -> Any:
     """Load one dataset split from JSONL files, with optional streaming and shuffling."""
     from datasets import load_dataset
 
     streaming = bool(cfg["data"].get("streaming", True))
-    messages_field = cfg["data"].get("messages_field", "messages")
-    do_validate = bool(cfg["data"].get("validate_messages", True))
+    mapper = get_dataset_mapper(cfg)
 
     LOG.info("Loading %s split from %s with streaming=%s", split_name, data_files, streaming)
 
@@ -279,9 +306,7 @@ def load_one_split(cfg: dict[str, Any], split_name: str, data_files: Union[str, 
     else:
         dataset = maybe_take(dataset, cfg["data"].get("max_eval_samples"), streaming)
 
-    dataset = dataset.map(
-        lambda ex: messages_to_prompt_completion(ex, messages_field, do_validate),
-    )
+    dataset = dataset.map(mapper)
 
     return dataset
 
